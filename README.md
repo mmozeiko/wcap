@@ -13,7 +13,7 @@ Get latest binary here: [wcap.exe][]
 Info
 ====
 
-wcap uses [Windows.Graphics.Capture][wgc] API available since Windows 10 version 1903, May 2019 Update (19H1) to capture
+wcap uses [Windows.Graphics.Capture][wgc] API available since **Windows 10 version 1903, May 2019 Update (19H1)** to capture
 contents of window or whole monitor. Captured texture is submitted to Media Foundation to encode video to mp4 file with
 hardware accelerated H264 codec. Using capture from compositor and hardware accelerated encoder allows it to consume very
 little CPU and memory.
@@ -30,11 +30,11 @@ Recorded mp4 file can be set to use fragmented mp4 format in settings. Fragmente
 Which means that in case application, or GPU drvier crashes or you run out of disk space, the partial mp4 file will be valid
 for playback. The disadvantage of fragmented mp4 file is that it is a bit larger than normal mp4 format, and seeking is slower.
 
-You can use settings dialog to restrict max size of recording - captured image from monitor or window will be scaled down
+You can use settings dialog to restrict max resolution of video - captured image from monitor or window will be scaled down
 to keep aspect ratio if you set any of max width/height settings to non-zero value. Similarly framerate of capture can be
 reduced to limit maximum amount of frames per second. Setting it to zero will use compositor framerate which is typically
 monitor refresh rate. Lower video framerate will give higher quality video for same bitrate and reduced GPU usage. If you
-notice too many dropped frames during recording, try reducing video size and video framerate.
+notice too many dropped frames during recording, try reducing video resolution and framerate.
 
 Capture of mouse cursor in video can be disabled when using Windows 10 version 2004, May 2020 Update (20H1) or newer.
 
