@@ -8,7 +8,6 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <shellapi.h>
-#include <knownfolders.h>
 
 #pragma comment (lib, "kernel32.lib")
 #pragma comment (lib, "user32.lib")
@@ -36,7 +35,6 @@
 #define HOT_RECORD_MONITOR 2
 
 // constants
-static LPWSTR gVideoFolder;
 static WCHAR gConfigPath[MAX_PATH];
 static LARGE_INTEGER gTickFreq;
 static HICON gIcon1;
@@ -140,7 +138,7 @@ static void StartRecording(LPCWSTR Caption)
 	WCHAR Filename[256];
 	wsprintfW(Filename, L"%04u%02u%02u_%02u%02u%02u.mp4", Time.wYear, Time.wMonth, Time.wDay, Time.wHour, Time.wMinute, Time.wSecond);
 
-	StrCpyW(gRecordingPath, gVideoFolder);
+	StrCpyW(gRecordingPath, gConfig.OutputFolder);
 	PathAppendW(gRecordingPath, Filename);
 
 	DWM_TIMING_INFO Info = { .cbSize = sizeof(Info) };
@@ -568,7 +566,6 @@ void WinMainCRTStartup()
 		ExitProcess(0);
 	}
 
-	HR(SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, NULL, &gVideoFolder));
 	GetModuleFileNameW(NULL, gConfigPath, _countof(gConfigPath));
 	PathRenameExtensionW(gConfigPath, L".ini");
 

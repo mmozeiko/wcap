@@ -13,6 +13,7 @@ typedef struct {
 	DWORD MaxVideoHeight;
 	DWORD MaxVideoFramerate;
 	DWORD VideoBitrate;
+	WCHAR OutputFolder[MAX_PATH];
 } Config;
 
 void Config_Load(Config* Config, LPCWSTR FileName);

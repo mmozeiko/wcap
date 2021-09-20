@@ -1,6 +1,10 @@
 #include "wcap_config.h"
 #include "wcap_capture.h"
 
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <knownfolders.h>
+
 #define INI_SECTION L"wcap"
 
 #define ID_OK                         IDOK     // 1
@@ -248,6 +252,16 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 	Config->MaxVideoHeight    = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoHeight",    0,     FileName);
 	Config->MaxVideoFramerate = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoFramerate", 60,    FileName);
 	Config->VideoBitrate      = GetPrivateProfileIntW(INI_SECTION, L"VideoBitrate",      8000,  FileName);
+
+	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", NULL, Config->OutputFolder, _countof(Config->OutputFolder), FileName);
+	if (Config->OutputFolder[0] == 0)
+	{
+		// by default output to user's Video folder
+		LPWSTR VideoFolder;
+		HR(SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, NULL, &VideoFolder));
+		StrCpyNW(Config->OutputFolder, VideoFolder, _countof(Config->OutputFolder));
+		CoTaskMemFree(VideoFolder);
+	}
 }
 
 void Config_Save(Config* Config, LPCWSTR FileName)
