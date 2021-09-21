@@ -26,6 +26,8 @@ it in settings - then video will be encoded using [Microsoft Media Foundation H2
 automatically used in case GPU/driver does not provide hardware accelerated encoder. You might want to explicitly use
 software encoder on older GPU's as their hardware encoder quality is not so great.
 
+Audio is captured using [WASAPI loopback recording][] and encoded using [Microsoft Media Foundation AAC][MSMFAAC] encoder.
+
 Recorded mp4 file can be set to use fragmented mp4 format in settings. Fragmented mp4 file does not require "finalizing" it.
 Which means that in case application, or GPU drvier crashes or you run out of disk space, the partial mp4 file will be valid
 for playback. The disadvantage of fragmented mp4 file is that it is a bit larger than normal mp4 format, and seeking is slower.
@@ -48,7 +50,7 @@ Future plans
 
  * Capture video from fixed position rectangle on screen
  * Allow to set max file size or duration of recording
- * Use WASAPI loopback recording to capture audio and encode using AAC
+ * Maybe automatically handle default audio device changes when recording audio?
  * Maybe allow to choose HEVC codec? Could be useful for recording in HDR 10-bit format
 
 License
@@ -63,3 +65,5 @@ a compiled binary, for any purpose, commercial or non-commercial, and by any mea
 [wgc]: https://blogs.windows.com/windowsdeveloper/2019/09/16/new-ways-to-do-screen-capture/
 [MSMFH264]: https://docs.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder
 [VS2019]: https://visualstudio.microsoft.com/vs/
+[WASAPI loopback recording]: https://docs.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording
+[MSMFAAC]: https://docs.microsoft.com/en-us/windows/win32/medfound/aac-encoder
