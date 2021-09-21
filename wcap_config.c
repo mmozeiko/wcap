@@ -13,16 +13,19 @@
 #define ID_OPEN_VIDEO_FOLDER          4
 #define ID_MOUSE_CURSOR               5
 #define ID_ONLY_CLIENT_AREA           6
-#define ID_FRAGMENTED_MP4             7
-#define ID_HARDWARE_ENCODER           8
-#define ID_MAX_VIDEO_WIDTH_LABEL      9
-#define ID_MAX_VIDEO_WIDTH           10
-#define ID_MAX_VIDEO_HEIGHT_LABEL    11
-#define ID_MAX_VIDEO_HEIGHT          12
-#define ID_MAX_VIDEO_FRAMERATE_LABEL 13
-#define ID_MAX_VIDEO_FRAMERATE       14
-#define ID_VIDEO_BITRATE_LABEL       15
-#define ID_VIDEO_BITRATE             16
+#define ID_CAPTURE_AUDIO              7
+#define ID_FRAGMENTED_MP4             8
+#define ID_HARDWARE_ENCODER           9
+#define ID_MAX_VIDEO_WIDTH_LABEL     10
+#define ID_MAX_VIDEO_WIDTH           11
+#define ID_MAX_VIDEO_HEIGHT_LABEL    12
+#define ID_MAX_VIDEO_HEIGHT          13
+#define ID_MAX_VIDEO_FRAMERATE_LABEL 14
+#define ID_MAX_VIDEO_FRAMERATE       15
+#define ID_VIDEO_BITRATE_LABEL       16
+#define ID_VIDEO_BITRATE             17
+#define ID_AUDIO_BITRATE_LABEL       18
+#define ID_AUDIO_BITRATE             19
 
 #define CONTROL_BUTTON    0x0080
 #define CONTROL_EDIT      0x0081
@@ -30,6 +33,9 @@
 #define CONTROL_LISTBOX   0x0083
 #define CONTROL_SCROLLBAR 0x0084
 #define CONTROL_COMBOBOX  0x0085
+
+// these are only ones that MFT AAC encoder supports
+static const DWORD gAudioBitrates[] = { 96, 128, 160, 192 };
 
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
@@ -42,12 +48,25 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		CheckDlgButton(Window, ID_OPEN_VIDEO_FOLDER,   C->OpenVideoFolder);
 		CheckDlgButton(Window, ID_MOUSE_CURSOR,        C->MouseCursor);
 		CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,    C->OnlyClientArea);
+		CheckDlgButton(Window, ID_CAPTURE_AUDIO ,      C->CaptureAudio);
 		CheckDlgButton(Window, ID_HARDWARE_ENCODER,    C->HardwareEncoder);
 		CheckDlgButton(Window, ID_FRAGMENTED_MP4,      C->FragmentedOutput);
 		SetDlgItemInt(Window,  ID_MAX_VIDEO_WIDTH,     C->MaxVideoWidth,     FALSE);
 		SetDlgItemInt(Window,  ID_MAX_VIDEO_HEIGHT,    C->MaxVideoHeight,    FALSE);
 		SetDlgItemInt(Window,  ID_MAX_VIDEO_FRAMERATE, C->MaxVideoFramerate, FALSE);
 		SetDlgItemInt(Window,  ID_VIDEO_BITRATE,       C->VideoBitrate,      FALSE);
+
+		HWND AudioBitrate = GetDlgItem(Window, ID_AUDIO_BITRATE);
+		for (int i = 0; i < _countof(gAudioBitrates); i++)
+		{
+			WCHAR Text[64];
+			wsprintfW(Text, L"%u", gAudioBitrates[i]);
+			SendMessageW(AudioBitrate, CB_ADDSTRING, 0, (LPARAM)Text);
+		}
+
+		WCHAR Text[64];
+		wsprintfW(Text, L"%u", C->AudioBitrate);
+		SendMessageW(AudioBitrate, CB_SELECTSTRING, -1, (LPARAM)Text);
 
 		SetForegroundWindow(Window);
 		return TRUE;
@@ -61,12 +80,18 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->OpenVideoFolder   = IsDlgButtonChecked(Window, ID_OPEN_VIDEO_FOLDER);
 			C->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
 			C->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
+			C->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
 			C->HardwareEncoder   = IsDlgButtonChecked(Window, ID_HARDWARE_ENCODER);
 			C->FragmentedOutput  = IsDlgButtonChecked(Window, ID_FRAGMENTED_MP4);
 			C->MaxVideoWidth     = GetDlgItemInt(Window,      ID_MAX_VIDEO_WIDTH,     NULL, FALSE);
 			C->MaxVideoHeight    = GetDlgItemInt(Window,      ID_MAX_VIDEO_HEIGHT,    NULL, FALSE);
 			C->MaxVideoFramerate = GetDlgItemInt(Window,      ID_MAX_VIDEO_FRAMERATE, NULL, FALSE);
 			C->VideoBitrate      = GetDlgItemInt(Window,      ID_VIDEO_BITRATE,       NULL, FALSE);
+
+			HWND AudioBitrate = GetDlgItem(Window, ID_AUDIO_BITRATE);
+			LRESULT AudioBitrateIndex = SendMessageW(AudioBitrate, CB_GETCURSEL, 0, 0);
+			C->AudioBitrate = gAudioBitrates[AudioBitrateIndex];
+
 			EndDialog(Window, TRUE);
 			return TRUE;
 		}
@@ -246,12 +271,14 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 	Config->OpenVideoFolder   = GetPrivateProfileIntW(INI_SECTION, L"OpenVideoFolder",   TRUE,  FileName) != 0;
 	Config->MouseCursor       = GetPrivateProfileIntW(INI_SECTION, L"MouseCursor",       TRUE,  FileName) != 0;
 	Config->OnlyClientArea    = GetPrivateProfileIntW(INI_SECTION, L"OnlyClientArea",    TRUE,  FileName) != 0;
+	Config->CaptureAudio      = GetPrivateProfileIntW(INI_SECTION, L"CaptureAudio",      TRUE,  FileName) != 0;
 	Config->FragmentedOutput  = GetPrivateProfileIntW(INI_SECTION, L"FragmentedOutput",  FALSE, FileName) != 0;
 	Config->HardwareEncoder   = GetPrivateProfileIntW(INI_SECTION, L"HardwareEncoder",   TRUE,  FileName) != 0;
 	Config->MaxVideoWidth     = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoWidth",     0,     FileName);
 	Config->MaxVideoHeight    = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoHeight",    0,     FileName);
 	Config->MaxVideoFramerate = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoFramerate", 60,    FileName);
 	Config->VideoBitrate      = GetPrivateProfileIntW(INI_SECTION, L"VideoBitrate",      8000,  FileName);
+	Config->AudioBitrate      = GetPrivateProfileIntW(INI_SECTION, L"AudioBitrate",      160,   FileName);
 
 	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", NULL, Config->OutputFolder, _countof(Config->OutputFolder), FileName);
 	if (Config->OutputFolder[0] == 0)
@@ -262,6 +289,16 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 		StrCpyNW(Config->OutputFolder, VideoFolder, _countof(Config->OutputFolder));
 		CoTaskMemFree(VideoFolder);
 	}
+
+	// check for valid audio bitrates
+	for (int i = 0; i < _countof(gAudioBitrates); i++)
+	{
+		if (Config->AudioBitrate == gAudioBitrates[i])
+		{
+			return;
+		}
+	}
+	Config->AudioBitrate = 160;
 }
 
 void Config_Save(Config* Config, LPCWSTR FileName)
@@ -272,6 +309,7 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 	WritePrivateProfileStringW(INI_SECTION, L"OpenVideoFolder",   Config->OpenVideoFolder   ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",       Config->MouseCursor       ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",    Config->OnlyClientArea    ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",      Config->CaptureAudio      ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"FragmentedOutput",  Config->FragmentedOutput  ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",   Config->HardwareEncoder   ? L"1" : L"0", FileName);
 
@@ -288,6 +326,9 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 
 	wsprintfW(Text, L"%u", Config->VideoBitrate);
 	WritePrivateProfileStringW(INI_SECTION, L"VideoBitrate", Text, FileName);
+
+	wsprintfW(Text, L"%u", Config->AudioBitrate);
+	WritePrivateProfileStringW(INI_SECTION, L"AudioBitrate", Text, FileName);
 }
 
 BOOL Config_ShowDialog(Config* Config, HWND Window)
@@ -309,6 +350,7 @@ BOOL Config_ShowDialog(Config* Config, HWND Window)
 					{ "O&pen Video Folder",  ID_OPEN_VIDEO_FOLDER,  CONTROL_BUTTON, BS_AUTOCHECKBOX  },
 					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       CONTROL_BUTTON, MouseCursorStyle },
 					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   CONTROL_BUTTON, BS_AUTOCHECKBOX  },
+					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      CONTROL_BUTTON, BS_AUTOCHECKBOX  },
 					{ "Fragmented MP&4",     ID_FRAGMENTED_MP4,     CONTROL_BUTTON, BS_AUTOCHECKBOX  },
 					{ "Hardware &Encoder",   ID_HARDWARE_ENCODER,   CONTROL_BUTTON, BS_AUTOCHECKBOX  },
 					{ NULL },
@@ -322,6 +364,7 @@ BOOL Config_ShowDialog(Config* Config, HWND Window)
 					{ "Max Video &Height",       ID_MAX_VIDEO_HEIGHT_LABEL,    CONTROL_STATIC, SS_LEFT },
 					{ "Max Video &Framerate",    ID_MAX_VIDEO_FRAMERATE_LABEL, CONTROL_STATIC, SS_LEFT },
 					{ "&Video Bitrate (kbit/s)", ID_VIDEO_BITRATE_LABEL,       CONTROL_STATIC, SS_LEFT },
+					{ "&Audio Bitrate (kbit/s)", ID_AUDIO_BITRATE_LABEL,       CONTROL_STATIC, SS_LEFT },
 					{ NULL },
 				},
 			},
@@ -329,10 +372,11 @@ BOOL Config_ShowDialog(Config* Config, HWND Window)
 				.Width = 40,
 				.Rows = (Config__DialogItem[])
 				{
-					{ "", ID_MAX_VIDEO_WIDTH,     CONTROL_EDIT, WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_MAX_VIDEO_HEIGHT,    CONTROL_EDIT, WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_MAX_VIDEO_FRAMERATE, CONTROL_EDIT, WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_VIDEO_BITRATE,       CONTROL_EDIT, WS_BORDER | ES_RIGHT | ES_NUMBER },
+					{ "", ID_MAX_VIDEO_WIDTH,     CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
+					{ "", ID_MAX_VIDEO_HEIGHT,    CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
+					{ "", ID_MAX_VIDEO_FRAMERATE, CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
+					{ "", ID_VIDEO_BITRATE,       CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
+					{ "", ID_AUDIO_BITRATE,       CONTROL_COMBOBOX, CBS_DROPDOWNLIST },
 					{ NULL },
 				},
 			},

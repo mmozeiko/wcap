@@ -1,5 +1,6 @@
 #include "wcap.h"
 #include "wcap_config.h"
+#include "wcap_audio.h"
 #include "wcap_capture.h"
 #include "wcap_encoder.h"
 
@@ -21,11 +22,16 @@
 #pragma comment (lib, "evr.lib")
 #pragma comment (lib, "strmiids.lib")
 #pragma comment (lib, "ole32.lib")
+#pragma comment (lib, "wmcodecdspuuid.lib")
+#pragma comment (lib, "avrt.lib")
 
 #define WM_WCAP_ALREADY_RUNNING (WM_USER+1)
 #define WM_WCAP_STOP_CAPTURE    (WM_USER+2)
 #define WM_WCAP_TRAY_TITLE      (WM_USER+3)
 #define WM_WCAP_COMMAND         (WM_USER+4)
+
+#define WCAP_AUDIO_CAPTURE_TIMER    1
+#define WCAP_AUDIO_CAPTURE_INTERVAL 100 // msec
 
 #define CMD_WCAP     1
 #define CMD_QUIT     2
@@ -53,6 +59,7 @@ static WCHAR gRecordingPath[MAX_PATH];
 // globals
 static HWND gWindow;
 static Config gConfig;
+static Audio gAudio;
 static Capture gCapture;
 static Encoder gEncoder;
 
@@ -170,6 +177,19 @@ static void StartRecording(LPCWSTR Caption)
 		.FramerateDen = FramerateDen,
 		.VideoBitrate = gConfig.VideoBitrate,
 	};
+
+	if (gConfig.CaptureAudio)
+	{
+		if (!Audio_Start(&gAudio))
+		{
+			ShowNotification(L"Cannot capture audio!", L"Cannot Start Recording", NIIF_WARNING);
+			Capture_Stop(&gCapture);
+			return;
+		}
+		EncConfig.AudioBitrate = gConfig.AudioBitrate;
+		EncConfig.AudioFormat = gAudio.Format;
+	}
+
 	if (!Encoder_Start(&gEncoder, gRecordingPath, &EncConfig))
 	{
 		Capture_Stop(&gCapture);
@@ -181,6 +201,11 @@ static void StartRecording(LPCWSTR Caption)
 	gRecordingDroppedFrames = 0;
 	Capture_Start(&gCapture, gConfig.MouseCursor);
 
+	if (gConfig.CaptureAudio)
+	{
+		SetTimer(gWindow, WCAP_AUDIO_CAPTURE_TIMER, WCAP_AUDIO_CAPTURE_INTERVAL, NULL);
+	}
+
 	if (gConfig.ShowNotifications)
 	{
 		ShowNotification(Caption, L"Recording Started", NIIF_INFO);
@@ -190,10 +215,67 @@ static void StartRecording(LPCWSTR Caption)
 	gRecording = TRUE;
 }
 
+static void EncodeCapturedAudio(void)
+{
+	if (gEncoder.StartTime == 0)
+	{
+		// we don't know when first video frame starts yet
+		return;
+	}
+
+	LARGE_INTEGER c1;
+	QueryPerformanceCounter(&c1);
+
+	LPVOID Data;
+	UINT32 FrameCount;
+	UINT64 Time;
+	while (Audio_GetNextBuffer(&gAudio, &Data, &FrameCount, &Time))
+	{
+		UINT32 FramesToEncode = FrameCount;
+		if (Time < gEncoder.StartTime)
+		{
+			const UINT32 SampleRate = gAudio.Format->nSamplesPerSec;
+			const UINT32 BytesPerFrame = gAudio.Format->nBlockAlign;
+
+			// figure out how much time (100nsec units) and frame count to skip from current buffer
+			UINT64 TimeToSkip = gEncoder.StartTime - Time;
+			UINT32 FramesToSkip = (UINT32)((TimeToSkip * SampleRate - 1) / 10000000 + 1);
+			if (FramesToSkip < FramesToEncode)
+			{
+				// need to skip part of captured data
+				Time += FramesToSkip * 10000000 / SampleRate;
+				FramesToEncode -= FramesToSkip;
+				if (Data)
+				{
+					Data = (BYTE*)Data + FramesToSkip * BytesPerFrame;
+				}
+			}
+			else
+			{
+				// need to skip all of captured data
+				FramesToEncode = 0;
+			}
+		}
+		if (FramesToEncode != 0)
+		{
+			Encoder_NewSamples(&gEncoder, Data, FramesToEncode, Time, gTickFreq.QuadPart);
+		}
+		Audio_ReleaseBuffer(&gAudio, FrameCount);
+	}
+}
+
 static void StopRecording(void)
 {
 	gRecording = FALSE;
 	SetThreadExecutionState(gRecordingState);
+
+	if (gConfig.CaptureAudio)
+	{
+		KillTimer(gWindow, WCAP_AUDIO_CAPTURE_TIMER);
+		Audio_Flush(&gAudio);
+		EncodeCapturedAudio();
+		Audio_Stop(&gAudio);
+	}
 
 	Capture_Stop(&gCapture);
 	Encoder_Stop(&gEncoder);
@@ -334,6 +416,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		RemoveTrayIcon(Window);
 		PostQuitMessage(0);
 		return 0;
+	}
+	else if (Message == WM_TIMER)
+	{
+		if (WParam == WCAP_AUDIO_CAPTURE_TIMER && gRecording)
+		{
+			EncodeCapturedAudio();
+			return 0;
+		}
 	}
 	else if (Message == WM_POWERBROADCAST)
 	{
@@ -570,6 +660,7 @@ void WinMainCRTStartup()
 	PathRenameExtensionW(gConfigPath, L".ini");
 
 	Config_Load(&gConfig, gConfigPath);
+	Audio_Init(&gAudio);
 	Capture_Init(&gCapture, Device, &OnCaptureClose, &OnCaptureFrame);
 	Encoder_Init(&gEncoder, Device, Context);
 

@@ -7,12 +7,14 @@ typedef struct {
 	BOOL OpenVideoFolder;
 	BOOL MouseCursor;
 	BOOL OnlyClientArea;
+	BOOL CaptureAudio;
 	BOOL FragmentedOutput;
 	BOOL HardwareEncoder;
 	DWORD MaxVideoWidth;
 	DWORD MaxVideoHeight;
 	DWORD MaxVideoFramerate;
 	DWORD VideoBitrate;
+	DWORD AudioBitrate;
 	WCHAR OutputFolder[MAX_PATH];
 } Config;
 
