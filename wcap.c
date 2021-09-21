@@ -314,6 +314,13 @@ static void CaptureWindow(void)
 		return;
 	}
 
+	LONG ExStyle = GetWindowLongW(Window, GWL_EXSTYLE);
+	if (ExStyle & WS_EX_TOOLWINDOW)
+	{
+		ShowNotification(L"Cannot capture toolbar windows!", L"Cannot Start Recording", NIIF_WARNING);
+		return;
+	}
+
 	if (!Capture_CreateWindow(&gCapture, Window, gConfig.OnlyClientArea))
 	{
 		ShowNotification(L"Cannot record selected window!", L"Error", NIIF_WARNING);
@@ -697,4 +704,4 @@ void WinMainCRTStartup()
 		TranslateMessage(&Message);
 		DispatchMessageW(&Message);
 	}
- }
+}
