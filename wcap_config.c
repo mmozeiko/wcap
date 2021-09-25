@@ -37,6 +37,8 @@
 // these are only ones that MFT AAC encoder supports
 static const DWORD gAudioBitrates[] = { 96, 128, 160, 192 };
 
+static HWND gWindow;
+
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_INITDIALOG)
@@ -69,7 +71,12 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SendMessageW(AudioBitrate, CB_SELECTSTRING, -1, (LPARAM)Text);
 
 		SetForegroundWindow(Window);
+		gWindow = Window;
 		return TRUE;
+	}
+	else if (Message == WM_DESTROY)
+	{
+		gWindow = NULL;
 	}
 	else if (Message == WM_COMMAND)
 	{
@@ -333,6 +340,12 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 
 BOOL Config_ShowDialog(Config* Config, HWND Window)
 {
+	if (gWindow)
+	{
+		SetForegroundWindow(gWindow);
+		return FALSE;
+	}
+
 	DWORD MouseCursorStyle = (Capture_CanHideMouseCursor() ? 0 : WS_DISABLED) | BS_AUTOCHECKBOX;
 
 	Config__DialogLayout Dialog = (Config__DialogLayout)
