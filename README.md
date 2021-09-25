@@ -41,6 +41,21 @@ notice too many dropped frames during recording, try reducing video resolution a
 
 Capture of mouse cursor in video can be disabled when using Windows 10 version 2004, May 2020 Update (20H1) or newer.
 
+Creating gif from mp4
+=====================
+
+If you want to create gif file out of recorded mp4 file, you can use following .bat file:
+
+    ffmpeg.exe -hide_banner -nostdin -loglevel fatal -stats -y -i %1 -filter_complex "[0]fps=15,split[v0][v1];[v0]palettegen=stats_mode=full[p];[v1][p]paletteuse" %~n1.gif
+
+And to use new palette every frame to have more colors, but larger filesize:
+
+    ffmpeg.exe -hide_banner -nostdin -loglevel fatal -stats -y -i %1 -filter_complex "[0]fps=15,split[v0][v1];[v0]palettegen=stats_mode=single[p];[v1][p]paletteuse=new=1" %~n1.gif
+
+Put this line in `make_gif.bat` file, place [ffmpeg][] executable next to it and then simply drag & drop .mp4 file on top of it.
+Change `fps=15` to desired gif fps (or remove to use original video fps). Check the [paletteuse][] filter arguments for
+different dither methods.
+
 Building
 ========
 
@@ -49,7 +64,6 @@ To build the binary from source code, have [Visual Studio 2019][VS2019] installe
 Future plans
 ============
 
- * Capture video from fixed position rectangle on screen
  * Allow to set max file size or duration of recording
  * Maybe automatically handle default audio device changes when recording audio?
  * Maybe allow to choose HEVC codec? Could be useful for recording in HDR 10-bit format
@@ -68,3 +82,5 @@ a compiled binary, for any purpose, commercial or non-commercial, and by any mea
 [VS2019]: https://visualstudio.microsoft.com/vs/
 [WASAPI loopback recording]: https://docs.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording
 [MSMFAAC]: https://docs.microsoft.com/en-us/windows/win32/medfound/aac-encoder
+[ffmpeg]: https://ffmpeg.org/
+[paletteuse]: https://ffmpeg.org/ffmpeg-filters.html#paletteuse
