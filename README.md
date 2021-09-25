@@ -7,8 +7,9 @@ Get latest binary here: [wcap.exe][]
 
  * press <kbd>Ctrl + PrintScreen</kbd> to start recording monitor (where mouse cursor currently is positioned)
  * press <kbd>Ctrl + Win + PrintScreen</kbd> to start recording currently active window
+ * press <kbd>Ctrl + Shift + PrintScreen</kbd> to select & record fixed position area on current monitor
  * press any of previous combinations to stop recording
- * right click on tray icon to change settings
+ * right or double-click on tray icon to change settings
 
 Info
 ====

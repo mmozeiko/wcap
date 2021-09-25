@@ -25,6 +25,7 @@ typedef struct Capture {
 	ITypedEventHandler OnFrameHandler;
 	UINT64 OnCloseToken;
 	UINT64 OnFrameToken;
+	RECT Rect;
 	SIZE CurrentSize;
 	BOOL OnlyClientArea;
 	HWND Window;
@@ -37,6 +38,6 @@ BOOL Capture_CanHideMouseCursor(void);
 void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback);
 
 BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea);
-BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor);
+BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor, RECT* Rect);
 void Capture_Start(Capture* Capture, BOOL WithMouseCursor);
 void Capture_Stop(Capture* Capture);

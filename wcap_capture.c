@@ -198,15 +198,9 @@ static RECT Capture__GetRect(Capture* Capture, LONG Width, LONG Height)
 			};
 		}
 	}
-	else // capturing whole monitor
+	else // capturing whole monitor, or rectangle on it
 	{
-		return (RECT)
-		{
-			.left = 0,
-			.top = 0,
-			.right = Width,
-			.bottom = Height,
-		};
+		return Capture->Rect;
 	}
 }
 
@@ -402,6 +396,7 @@ BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea)
 			RECT Rect = Capture__GetRect(Capture, Size.cx, Size.cy);
 			Capture->CurrentSize.cx = Rect.right - Rect.left;
 			Capture->CurrentSize.cy = Rect.bottom - Rect.top;
+			Capture->Rect = Rect;
 
 			return TRUE;
 		}
@@ -411,7 +406,7 @@ BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea)
 	return FALSE;
 }
 
-BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor)
+BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor, RECT* Rect)
 {
 	IGraphicsCaptureItem* Item;
 	if (SUCCEEDED(Capture->ItemInterop->vtbl->CreateForMonitor(Capture->ItemInterop, Monitor, &IID_IGraphicsCaptureItem, (LPVOID*)&Item)))
@@ -427,6 +422,7 @@ BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor)
 			Capture->OnlyClientArea = FALSE;
 			Capture->Window = NULL;
 			Capture->CurrentSize = Size;
+			Capture->Rect = Rect ? *Rect : (RECT) { 0, 0, Size.cx, Size.cy };
 			return TRUE;
 		}
 

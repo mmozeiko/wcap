@@ -9,9 +9,12 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <shellapi.h>
+#include <windowsx.h>
 
 #pragma comment (lib, "kernel32.lib")
 #pragma comment (lib, "user32.lib")
+#pragma comment (lib, "gdi32.lib")
+#pragma comment (lib, "msimg32.lib")
 #pragma comment (lib, "d3d11.lib")
 #pragma comment (lib, "dwmapi.lib")
 #pragma comment (lib, "shell32.lib")
@@ -24,6 +27,7 @@
 #pragma comment (lib, "ole32.lib")
 #pragma comment (lib, "wmcodecdspuuid.lib")
 #pragma comment (lib, "avrt.lib")
+#pragma comment (lib, "uxtheme.lib")
 
 #define WM_WCAP_ALREADY_RUNNING (WM_USER+1)
 #define WM_WCAP_STOP_CAPTURE    (WM_USER+2)
@@ -39,6 +43,23 @@
 
 #define HOT_RECORD_WINDOW  1
 #define HOT_RECORD_MONITOR 2
+#define HOT_RECORD_RECT    3
+
+#define WCAP_RESIZE_NONE 0
+#define WCAP_RESIZE_TL   1
+#define WCAP_RESIZE_T    2
+#define WCAP_RESIZE_TR   3
+#define WCAP_RESIZE_L    4
+#define WCAP_RESIZE_M    5
+#define WCAP_RESIZE_R    6
+#define WCAP_RESIZE_BL   7
+#define WCAP_RESIZE_B    8
+#define WCAP_RESIZE_BR   9
+
+#define WCAP_UI_FONT      L"Segoe UI"
+#define WCAP_UI_FONT_SIZE 16
+
+#define WCAP_RECT_BORDER 2
 
 // constants
 static WCHAR gConfigPath[MAX_PATH];
@@ -46,6 +67,10 @@ static LARGE_INTEGER gTickFreq;
 static HICON gIcon1;
 static HICON gIcon2;
 static UINT WM_TASKBARCREATED;
+static HCURSOR gCursorArrow;
+static HCURSOR gCursorResize[10];
+static HFONT gFont;
+static HFONT gFontBold;
 
 // recording state
 static BOOL gRecording;
@@ -55,6 +80,17 @@ static UINT64 gRecordingNextEncode;
 static UINT64 gRecordingNextTooltip;
 static EXECUTION_STATE gRecordingState;
 static WCHAR gRecordingPath[MAX_PATH];
+
+// when selecting rectangle to record
+static HMONITOR gRectMonitor;
+static HDC gRectContext;
+static HBITMAP gRectBitmap;
+static DWORD gRectWidth;
+static DWORD gRectHeight;
+static BOOL gRectSelected;
+static POINT gRectSelection[2];
+static POINT gRectMousePos;
+static int gRectResize;
 
 // globals
 static HWND gWindow;
@@ -169,8 +205,8 @@ static void StartRecording(LPCWSTR Caption)
 	{
 		.FragmentedOutput = gConfig.FragmentedOutput,
 		.HardwareEncoder = gConfig.HardwareEncoder,
-		.Width = gCapture.CurrentSize.cx,
-		.Height = gCapture.CurrentSize.cy,
+		.Width = gCapture.Rect.right - gCapture.Rect.left,
+		.Height = gCapture.Rect.bottom - gCapture.Rect.top,
 		.MaxWidth = gConfig.MaxVideoWidth,
 		.MaxHeight = gConfig.MaxVideoHeight,
 		.FramerateNum = FramerateNum,
@@ -284,6 +320,9 @@ static void StopRecording(void)
 		ShowFileInFolder(gRecordingPath);
 	}
 
+	SetWindowPos(gWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE);
+	SetWindowLongW(gWindow, GWL_EXSTYLE, 0);
+
 	UpdateTrayIcon(gIcon1);
 	if (gConfig.ShowNotifications)
 	{
@@ -345,7 +384,7 @@ static void CaptureMonitor(void)
 		return;
 	}
 
-	if (!Capture_CreateMonitor(&gCapture, Monitor))
+	if (!Capture_CreateMonitor(&gCapture, Monitor, NULL))
 	{
 		ShowNotification(L"Cannot record selected monitor!", L"Error", NIIF_WARNING);
 		return;
@@ -400,13 +439,162 @@ static void CaptureMonitor(void)
 	StartRecording(MonitorName[0] ? MonitorName : Info.szDevice);
 }
 
+static void CaptureRectangleInit(void)
+{
+	POINT Mouse;
+	GetCursorPos(&Mouse);
+
+	HMONITOR Monitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONULL);
+	if (Monitor == NULL)
+	{
+		ShowNotification(L"Unknown monitor!", L"Cannot Start Recording", NIIF_WARNING);
+		return;
+	}
+
+	MONITORINFOEXW Info = { .cbSize = sizeof(Info) };
+	GetMonitorInfoW(Monitor, (LPMONITORINFO)&Info);
+
+	HDC DeviceContext = CreateDCW(L"DISPLAY", Info.szDevice, NULL, NULL);
+	if (DeviceContext == NULL)
+	{
+		ShowNotification(L"Error getting HDC of monitor!", L"Cannot Start Recording", NIIF_WARNING);
+		return;
+	}
+
+	DWORD Width = Info.rcMonitor.right - Info.rcMonitor.left;
+	DWORD Height = Info.rcMonitor.bottom - Info.rcMonitor.top;
+
+	HDC MemoryContext = CreateCompatibleDC(DeviceContext);
+	Assert(MemoryContext);
+
+	HBITMAP MemoryBitmap = CreateCompatibleBitmap(DeviceContext, Width, Height);
+	Assert(MemoryBitmap);
+
+	SelectObject(MemoryContext, MemoryBitmap);
+	BitBlt(MemoryContext, 0, 0, Width, Height, DeviceContext, 0, 0, SRCCOPY);
+
+	DeleteDC(DeviceContext);
+
+	gRectMonitor = Monitor;
+	gRectContext = MemoryContext;
+	gRectBitmap = MemoryBitmap;
+	gRectWidth = Width;
+	gRectHeight = Height;
+	gRectSelected = FALSE;
+	gRectResize = WCAP_RESIZE_NONE;
+
+	SetCursor(gCursorResize[WCAP_RESIZE_NONE]);
+	SetWindowPos(gWindow, HWND_TOPMOST, Info.rcMonitor.left, Info.rcMonitor.top, Width, Height, SWP_SHOWWINDOW);
+	SetForegroundWindow(gWindow);
+	InvalidateRect(gWindow, NULL, FALSE);
+}
+
+static void CaptureRectangleDone(void)
+{
+	ShowWindow(gWindow, SW_HIDE);
+	SetCursor(gCursorArrow);
+	ReleaseCapture();
+
+	if (gRectContext)
+	{
+		DeleteDC(gRectContext);
+		gRectContext = NULL;
+
+		DeleteObject(gRectBitmap);
+		gRectBitmap = NULL;
+	}
+}
+
+static void CaptureRectangle(void)
+{
+	CaptureRectangleDone();
+
+	MONITORINFO Info = { .cbSize = sizeof(Info) };
+	GetMonitorInfoW(gRectMonitor, &Info);
+
+	RECT Rect =
+	{
+		.left   = gRectSelection[0].x,
+		.right  = gRectSelection[1].x,
+		.top    = gRectSelection[0].y,
+		.bottom = gRectSelection[1].y,
+	};
+
+	LONG ExStyle = WS_EX_LAYERED | WS_EX_TRANSPARENT;
+	SetWindowLongW(gWindow, GWL_EXSTYLE, ExStyle);
+	SetLayeredWindowAttributes(gWindow, RGB(255, 0, 255), 0, LWA_COLORKEY);
+
+	int X = Info.rcMonitor.left + Rect.left - (WCAP_RECT_BORDER + 1);
+	int Y = Info.rcMonitor.top + Rect.top - (WCAP_RECT_BORDER + 1);
+	int W = Rect.right - Rect.left + 2 * (WCAP_RECT_BORDER + 1);
+	int H = Rect.bottom - Rect.top + 2 * (WCAP_RECT_BORDER + 1);
+	SetWindowPos(gWindow, HWND_TOPMOST, X, Y, W, H, SWP_SHOWWINDOW);
+	InvalidateRect(gWindow, NULL, FALSE);
+
+	if (!Capture_CreateMonitor(&gCapture, gRectMonitor, &Rect))
+	{
+		ShowNotification(L"Cannot record monitor!", L"Error", NIIF_WARNING);
+		return;
+	}
+
+	WCHAR Text[128];
+	wsprintfW(Text, L"%d x %d", Rect.right - Rect.left, Rect.bottom - Rect.top);
+
+	StartRecording(Text);
+}
+
+static int GetPointResize(int X, int Y)
+{
+	int BorderX = GetSystemMetrics(SM_CXSIZEFRAME);
+	int BorderY = GetSystemMetrics(SM_CYSIZEFRAME);
+
+	int X0 = min(gRectSelection[0].x, gRectSelection[1].x);
+	int Y0 = min(gRectSelection[0].y, gRectSelection[1].y);
+	int X1 = max(gRectSelection[0].x, gRectSelection[1].x);
+	int Y1 = max(gRectSelection[0].y, gRectSelection[1].y);
+
+	POINT P = { X, Y };
+
+	RECT TL = { X0 - BorderX, Y0 - BorderY, X0 + BorderX, Y0 + BorderY };
+	if (PtInRect(&TL, P)) return WCAP_RESIZE_TL;
+
+	RECT TR = { X1 - BorderX, Y0 - BorderY, X1 + BorderX, Y0 + BorderY };
+	if (PtInRect(&TR, P)) return WCAP_RESIZE_TR;
+
+	RECT BL = { X0 - BorderX, Y1 - BorderY, X0 + BorderX, Y1 + BorderY };
+	if (PtInRect(&BL, P)) return WCAP_RESIZE_BL;
+
+	RECT BR = { X1 - BorderX, Y1 - BorderY, X1 + BorderX, Y1 + BorderY };
+	if (PtInRect(&BR, P)) return WCAP_RESIZE_BR;
+
+	RECT T = { X0, Y0 - BorderY, X1, Y0 + BorderY };
+	if (PtInRect(&T, P)) return WCAP_RESIZE_T;
+
+	RECT B = { X0, Y1 - BorderY, X1, Y1 + BorderY };
+	if (PtInRect(&B, P)) return WCAP_RESIZE_B;
+
+	RECT L = { X0 - BorderX, Y0, X0 + BorderX, Y1 };
+	if (PtInRect(&L, P)) return WCAP_RESIZE_L;
+
+	RECT R = { X1 - BorderX, Y0, X1 + BorderX, Y1 };
+	if (PtInRect(&R, P)) return WCAP_RESIZE_R;
+
+	RECT M = { X0, Y0, X1, Y1 };
+	if (PtInRect(&M, P)) return WCAP_RESIZE_M;
+
+	return WCAP_RESIZE_NONE;
+}
+
 static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_CREATE)
 	{
-		BOOL Success1 = RegisterHotKey(Window, HOT_RECORD_WINDOW, MOD_CONTROL | MOD_WIN, VK_SNAPSHOT);
-		BOOL Success2 = RegisterHotKey(Window, HOT_RECORD_MONITOR, MOD_CONTROL, VK_SNAPSHOT);
-		if (!Success1 || !Success2)
+		HR(BufferedPaintInit());
+
+		BOOL Success1 = RegisterHotKey(Window, HOT_RECORD_WINDOW,  MOD_CONTROL | MOD_WIN,   VK_SNAPSHOT);
+		BOOL Success2 = RegisterHotKey(Window, HOT_RECORD_MONITOR, MOD_CONTROL,             VK_SNAPSHOT);
+		BOOL Success3 = RegisterHotKey(Window, HOT_RECORD_RECT,    MOD_CONTROL | MOD_SHIFT, VK_SNAPSHOT);
+		if (!Success1 || !Success2 || !Success3)
 		{
 			MessageBoxW(NULL, L"Cannot register wcap keyboard shortcuts!", WCAP_TITLE, MB_ICONERROR);
 			return -1;
@@ -423,6 +611,168 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		RemoveTrayIcon(Window);
 		PostQuitMessage(0);
 		return 0;
+	}
+	else if (Message == WM_CLOSE)
+	{
+		if (gRectContext)
+		{
+			CaptureRectangleDone();
+		}
+		return 0;
+	}
+	else if (Message == WM_ACTIVATEAPP)
+	{
+		if (gRectContext)
+		{
+			if (WParam == FALSE)
+			{
+				CaptureRectangleDone();
+				return 0;
+			}
+		}
+	}
+	else if (Message == WM_KEYDOWN)
+	{
+		if (gRectContext)
+		{
+			if (WParam == VK_ESCAPE)
+			{
+				CaptureRectangleDone();
+				return 0;
+			}
+			else if (WParam == VK_RETURN)
+			{
+				if (gRectSelected)
+				{
+					CaptureRectangle();
+				}
+				return 0;
+			}
+		}
+	}
+	else if (Message == WM_LBUTTONDOWN)
+	{
+		if (gRectContext)
+		{
+			int X = GET_X_LPARAM(LParam);
+			int Y = GET_Y_LPARAM(LParam);
+
+			int Resize = gRectSelected ? GetPointResize(X, Y) : WCAP_RESIZE_NONE;
+			if (Resize == WCAP_RESIZE_NONE)
+			{
+				// inital rectangle will be empty
+				gRectSelection[0].x = gRectSelection[1].x = X;
+				gRectSelection[0].y = gRectSelection[1].y = Y;
+				gRectSelected = FALSE;
+
+				InvalidateRect(Window, NULL, FALSE);
+			}
+			else
+			{
+				// resizing direction
+				gRectMousePos = (POINT){ X, Y };
+			}
+
+			gRectResize = Resize;
+			SetCapture(Window);
+			return 0;
+		}
+	}
+	else if (Message == WM_LBUTTONUP)
+	{
+		if (gRectContext)
+		{
+			if (gRectSelected)
+			{
+				// fix the selected rectangle coordinates, so next resizing starts on the correct side
+				int X0 = min(gRectSelection[0].x, gRectSelection[1].x);
+				int Y0 = min(gRectSelection[0].y, gRectSelection[1].y);
+				int X1 = max(gRectSelection[0].x, gRectSelection[1].x);
+				int Y1 = max(gRectSelection[0].y, gRectSelection[1].y);
+				gRectSelection[0] = (POINT){ X0, Y0 };
+				gRectSelection[1] = (POINT){ X1, Y1 };
+			}
+			ReleaseCapture();
+			return 0;
+		}
+	}
+	else if (Message == WM_MOUSEMOVE)
+	{
+		if (gRectContext)
+		{
+			int X = GET_X_LPARAM(LParam);
+			int Y = GET_Y_LPARAM(LParam);
+
+			if (WParam & MK_LBUTTON)
+			{
+				BOOL Update = FALSE;
+
+				if (gRectResize == WCAP_RESIZE_TL || gRectResize == WCAP_RESIZE_L || gRectResize == WCAP_RESIZE_BL)
+				{
+					// left moved
+					gRectSelection[0].x = X;
+					Update = TRUE;
+				}
+				else if (gRectResize == WCAP_RESIZE_TR || gRectResize == WCAP_RESIZE_R || gRectResize == WCAP_RESIZE_BR)
+				{
+					// right moved
+					gRectSelection[1].x = X;
+					Update = TRUE;
+				}
+
+				if (gRectResize == WCAP_RESIZE_TL || gRectResize == WCAP_RESIZE_T || gRectResize == WCAP_RESIZE_TR)
+				{
+					// top moved
+					gRectSelection[0].y = Y;
+					Update = TRUE;
+				}
+				else if (gRectResize == WCAP_RESIZE_BL || gRectResize == WCAP_RESIZE_B || gRectResize == WCAP_RESIZE_BR)
+				{
+					// bottom moved
+					gRectSelection[1].y = Y;
+					Update = TRUE;
+				}
+
+				if (gRectResize == WCAP_RESIZE_M)
+				{
+					// if moving whole rectangle update both
+					int DX = X - gRectMousePos.x;
+					int DY = Y - gRectMousePos.y;
+					gRectMousePos = (POINT){ X, Y };
+
+					gRectSelection[0].x += DX;
+					gRectSelection[0].y += DY;
+					gRectSelection[1].x += DX;
+					gRectSelection[1].y += DY;
+
+					Update = TRUE;
+				}
+				else if (gRectResize == WCAP_RESIZE_NONE)
+				{
+					// no resize means we're selecting initial rectangle
+					gRectSelection[1].x = X;
+					gRectSelection[1].y = Y;
+					if (gRectSelection[0].x != gRectSelection[1].x && gRectSelection[0].y != gRectSelection[1].y)
+					{
+						// when we have non-zero size rectangle, we're good with initial stage
+						gRectSelected = TRUE;
+						Update = TRUE;
+					}
+				}
+
+				if (Update)
+				{
+					InvalidateRect(Window, NULL, FALSE);
+				}
+			}
+			else
+			{
+				int Resize = gRectSelected ? GetPointResize(X, Y) : WCAP_RESIZE_NONE;
+				SetCursor(gCursorResize[Resize]);
+			}
+
+			return 0;
+		}
 	}
 	else if (Message == WM_TIMER)
 	{
@@ -516,13 +866,20 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		}
 		else
 		{
-			if (WParam == HOT_RECORD_WINDOW)
+			if (gRectContext == NULL)
 			{
-				CaptureWindow();
-			}
-			else if (WParam == HOT_RECORD_MONITOR)
-			{
-				CaptureMonitor();
+				if (WParam == HOT_RECORD_WINDOW)
+				{
+					CaptureWindow();
+				}
+				else if (WParam == HOT_RECORD_MONITOR)
+				{
+					CaptureMonitor();
+				}
+				else if (WParam == HOT_RECORD_RECT)
+				{
+					CaptureRectangleInit();
+				}
 			}
 		}
 		return 0;
@@ -573,6 +930,148 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	{
 		// in case taskbar was re-created (explorer.exe crashed) add our icon back
 		AddTrayIcon(Window);
+		return 0;
+	}
+	else if (Message == WM_ERASEBKGND)
+	{
+		return 1;
+	}
+	else if (Message == WM_PAINT)
+	{
+		PAINTSTRUCT Paint;
+		HDC PaintContext = BeginPaint(Window, &Paint);
+
+		HDC Context;
+		HPAINTBUFFER BufferedPaint = BeginBufferedPaint(PaintContext, &Paint.rcPaint, BPBF_COMPATIBLEBITMAP, NULL, &Context);
+		if (BufferedPaint)
+		{
+			if (gRectContext)
+			{
+				int X = Paint.rcPaint.left;
+				int Y = Paint.rcPaint.top;
+				int W = Paint.rcPaint.right - Paint.rcPaint.left;
+				int H = Paint.rcPaint.bottom - Paint.rcPaint.top;
+
+				// clear
+				FillRect(Context, &Paint.rcPaint, GetStockObject(BLACK_BRUSH));
+
+				// draw darkened screenshot
+				{
+					HDC TempContext = CreateCompatibleDC(Context);
+					Assert(TempContext);
+					HBITMAP TempBitmap = CreateCompatibleBitmap(Context, W, H);
+					Assert(TempBitmap);
+					SelectObject(TempContext, TempBitmap);
+
+					BitBlt(TempContext, 0, 0, W, H, gRectContext, X, Y, SRCCOPY);
+
+					BLENDFUNCTION Blend =
+					{
+						.BlendOp = AC_SRC_OVER,
+						.SourceConstantAlpha = 0x40,
+					};
+					AlphaBlend(Context, X, Y, W, H, TempContext, 0, 0, W, H, Blend);
+
+					DeleteObject(TempBitmap);
+					DeleteDC(TempContext);
+				}
+
+				if (gRectSelected)
+				{
+					// draw selected rectangle
+					int X0 = min(gRectSelection[0].x, gRectSelection[1].x);
+					int Y0 = min(gRectSelection[0].y, gRectSelection[1].y);
+					int X1 = max(gRectSelection[0].x, gRectSelection[1].x);
+					int Y1 = max(gRectSelection[0].y, gRectSelection[1].y);
+					BitBlt(Context, X0, Y0, X1 - X0, Y1 - Y0, gRectContext, X0, Y0, SRCCOPY);
+
+					RECT Rect = { X0 - 1, Y0 - 1, X1 + 1, Y1 + 1 };
+					FrameRect(Context, &Rect, GetStockObject(WHITE_BRUSH));
+
+					WCHAR Text[128];
+					int TextLength = wsprintfW(Text, L"%d x %d", X1 - X0, Y1 - Y0);
+
+					SelectObject(Context, gFontBold);
+					SetTextAlign(Context, TA_TOP | TA_RIGHT);
+					SetTextColor(Context, RGB(255, 255, 255));
+					SetBkMode(Context, TRANSPARENT);
+					ExtTextOutW(Context, X1, Y1, 0, NULL, Text, TextLength, NULL);
+				}
+				else
+				{
+					// draw initial message when no rectangle is selected
+					SelectObject(Context, gFont);
+					SelectObject(Context, GetStockObject(DC_PEN));
+					SelectObject(Context, GetStockObject(DC_BRUSH));
+
+					const WCHAR Line1[] = L"Select area with the mouse and press ENTER to start capture.";
+					const WCHAR Line2[] = L"Press ESC to cancel.";
+
+					const WCHAR* Lines[] = { Line1, Line2 };
+					const int LineLengths[] = { _countof(Line1) - 1, _countof(Line2) - 1 };
+					int Widths[_countof(Lines)];
+					int Height;
+
+					int TotalWidth = 0;
+					int TotalHeight = 0;
+					for (int i = 0; i < _countof(Lines); i++)
+					{
+						SIZE Size;
+						GetTextExtentPoint32W(Context, Lines[i], LineLengths[i], &Size);
+						Widths[i] = Size.cx;
+						Height = Size.cy;
+						TotalWidth = max(TotalWidth, Size.cx);
+						TotalHeight += Size.cy;
+					}
+					TotalWidth += 2 * Height;
+					TotalHeight += Height;
+
+					int MsgX = (gRectWidth - TotalWidth) / 2;
+					int MsgY = (gRectHeight - TotalHeight) / 2;
+
+					SetDCPenColor(Context, RGB(255, 255, 255));
+					SetDCBrushColor(Context, RGB(0, 0, 128));
+					Rectangle(Context, MsgX, MsgY, MsgX + TotalWidth, MsgY + TotalHeight);
+
+					SetTextAlign(Context, TA_TOP | TA_CENTER);
+					SetTextColor(Context, RGB(255, 255, 0));
+					SetBkMode(Context, TRANSPARENT);
+					int Y = MsgY + Height / 2;
+					int X = gRectWidth / 2;
+					for (int i = 0; i < _countof(Lines); i++)
+					{
+						ExtTextOutW(Context, X, Y, 0, NULL, Lines[i], LineLengths[i], NULL);
+						Y += Height;
+					}
+				}
+			}
+			else
+			{
+				RECT Rect;
+				GetClientRect(Window, &Rect);
+
+				HBRUSH BorderBrush = CreateSolidBrush(RGB(255, 255, 0));
+				Assert(BorderBrush);
+				FillRect(Context, &Rect, BorderBrush);
+				DeleteObject(BorderBrush);
+
+				Rect.left += WCAP_RECT_BORDER;
+				Rect.top += WCAP_RECT_BORDER;
+				Rect.right -= WCAP_RECT_BORDER;
+				Rect.bottom -= WCAP_RECT_BORDER;
+
+				HBRUSH ColorKeyBrush = CreateSolidBrush(RGB(255, 0, 255));
+				Assert(ColorKeyBrush);
+				FillRect(Context, &Rect, ColorKeyBrush);
+				DeleteObject(ColorKeyBrush);
+
+				FrameRect(Context, &Rect, GetStockObject(BLACK_BRUSH));
+			}
+
+			EndBufferedPaint(BufferedPaint, TRUE);
+		}
+
+		EndPaint(Window, &Paint);
 		return 0;
 	}
 
@@ -673,6 +1172,24 @@ void WinMainCRTStartup()
 
 	QueryPerformanceFrequency(&gTickFreq);
 
+	gCursorArrow = LoadCursorA(NULL, IDC_ARROW);
+	gCursorResize[WCAP_RESIZE_NONE] = LoadCursorA(NULL, IDC_CROSS);
+	gCursorResize[WCAP_RESIZE_M]    = LoadCursorA(NULL, IDC_SIZEALL);
+	gCursorResize[WCAP_RESIZE_T]    = gCursorResize[WCAP_RESIZE_B]  = LoadCursorA(NULL, IDC_SIZENS);
+	gCursorResize[WCAP_RESIZE_L]    = gCursorResize[WCAP_RESIZE_R]  = LoadCursorA(NULL, IDC_SIZEWE);
+	gCursorResize[WCAP_RESIZE_TL]   = gCursorResize[WCAP_RESIZE_BR] = LoadCursorA(NULL, IDC_SIZENWSE);
+	gCursorResize[WCAP_RESIZE_TR]   = gCursorResize[WCAP_RESIZE_BL] = LoadCursorA(NULL, IDC_SIZENESW);
+
+	gFont = CreateFontW(-WCAP_UI_FONT_SIZE, 0, 0, 0, FW_NORMAL,
+		FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		CLEARTYPE_QUALITY, DEFAULT_PITCH, WCAP_UI_FONT);
+	Assert(gFont);
+
+	gFontBold = CreateFontW(-WCAP_UI_FONT_SIZE, 0, 0, 0, FW_BOLD,
+		FALSE, FALSE, FALSE,DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		CLEARTYPE_QUALITY, DEFAULT_PITCH, WCAP_UI_FONT);
+	Assert(gFontBold);
+
 	gIcon1 = LoadIconW(WindowClass.hInstance, MAKEINTRESOURCEW(1));
 	gIcon2 = LoadIconW(WindowClass.hInstance, MAKEINTRESOURCEW(2));
 	Assert(gIcon1 && gIcon2);
@@ -683,9 +1200,10 @@ void WinMainCRTStartup()
 	ATOM Atom = RegisterClassExW(&WindowClass);
 	Assert(Atom);
 
-	gWindow = CreateWindowExW(0, WindowClass.lpszClassName, WCAP_TITLE,
-		WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-		CW_USEDEFAULT, NULL, NULL, WindowClass.hInstance, NULL);
+	gWindow = CreateWindowExW(
+		0, WindowClass.lpszClassName, WCAP_TITLE, WS_POPUP,
+		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+		NULL, NULL, WindowClass.hInstance, NULL);
 	if (!gWindow)
 	{
 		ExitProcess(0);
