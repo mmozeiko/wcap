@@ -68,6 +68,21 @@ Future plans
  * Maybe automatically handle default audio device changes when recording audio?
  * Maybe allow to choose HEVC codec? Could be useful for recording in HDR 10-bit format
 
+Changelog
+=========
+
+##### 2021.09.25
+ * allow to capture fixed position rectangle area on screen
+ * prevent config dialog to be open multiple times
+
+##### 2021.09.20
+ * added WASAPI loopback recording
+ * audio is encoded using AAC codec
+ * fix crash when capturing toolbar window
+
+##### 2021.09.19
+ * initial release
+
 License
 =======
 
