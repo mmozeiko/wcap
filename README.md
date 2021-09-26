@@ -30,14 +30,15 @@ software encoder on older GPU's as their hardware encoder quality is not so grea
 Audio is captured using [WASAPI loopback recording][] and encoded using [Microsoft Media Foundation AAC][MSMFAAC] encoder.
 
 Recorded mp4 file can be set to use fragmented mp4 format in settings. Fragmented mp4 file does not require "finalizing" it.
-Which means that in case application, or GPU drvier crashes or you run out of disk space, the partial mp4 file will be valid
-for playback. The disadvantage of fragmented mp4 file is that it is a bit larger than normal mp4 format, and seeking is slower.
+Which means that in case application or GPU driver crashes or if you run out of disk space then the partial mp4 file will be
+valid for playback. The disadvantage of fragmented mp4 file is that it is a bit larger than normal mp4 format, and seeking
+is slower.
 
-You can use settings dialog to restrict max resolution of video - captured image from monitor or window will be scaled down
-to keep aspect ratio if you set any of max width/height settings to non-zero value. Similarly framerate of capture can be
-reduced to limit maximum amount of frames per second. Setting it to zero will use compositor framerate which is typically
-monitor refresh rate. Lower video framerate will give higher quality video for same bitrate and reduced GPU usage. If you
-notice too many dropped frames during recording, try reducing video resolution and framerate.
+You can use settings dialog to restrict max resolution of video - captured image will be scaled down to keep aspect ratio
+if you set any of max width/height settings to non-zero value. Similarly framerate of capture can be reduced to limit
+maximum amount of frames per second. Setting it to zero will use compositor framerate which is typically monitor refresh
+rate. Lower video framerate will give higher quality video for same bitrate and reduced GPU usage. If you notice too many
+dropped frames during recording, try reducing video resolution and framerate.
 
 Capture of mouse cursor in video can be disabled when using Windows 10 version 2004, May 2020 Update (20H1) or newer.
 
