@@ -6,6 +6,11 @@ where /Q cl.exe || (
   call "%VS2019INSTALLDIR%\VC\Auxiliary\Build\vcvarsall.bat" amd64 || exit /b 1
 )
 
+if "%Platform%" neq "x64" (
+  echo ERROR: please run this from MSVC x64 native tools command prompt, 32-bit target is not supported!
+  exit /b 1
+)
+
 if "%1" equ "debug" (
   set CL=/MTd /Od /Zi /D_DEBUG /RTC1 /Fdwcap.pdb /fsanitize=address
   set LINK=/DEBUG libucrtd.lib libvcruntimed.lib

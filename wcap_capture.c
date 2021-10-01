@@ -303,7 +303,7 @@ BOOL Capture_IsSupported(void)
 	HMODULE NtModule = GetModuleHandleW(L"ntdll.dll");
 	Assert(NtModule);
 
-	LONG (*RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
+	LONG (WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
 	Assert(RtlGetVersion);
 
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
@@ -318,7 +318,7 @@ BOOL Capture_CanHideMouseCursor(void)
 	HMODULE NtModule = GetModuleHandleW(L"ntdll.dll");
 	Assert(NtModule);
 
-	LONG (*RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
+	LONG (WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
 	Assert(RtlGetVersion);
 
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
