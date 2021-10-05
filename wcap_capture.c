@@ -347,8 +347,8 @@ void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* 
 	Assert(CreateDispatcherQueueController);
 	Assert(CreateDirect3D11DeviceFromDXGIDevice);
 
-	const DWORD RO_INIT_MULTITHREADED = 1;
-	HR(RoInitialize(RO_INIT_MULTITHREADED));
+	const DWORD RO_INIT_SINGLETHREADED = 0;
+	HR(RoInitialize(RO_INIT_SINGLETHREADED));
 
 	HR(RoGetActivationFactory(&GraphicsCaptureItemName, &IID_IGraphicsCaptureItemInterop, (LPVOID*)&Capture->ItemInterop));
 	HR(RoGetActivationFactory(&Direct3D11CaptureFramePoolName, &IID_IDirect3D11CaptureFramePoolStatics, (LPVOID*)&Capture->FramePoolStatics));

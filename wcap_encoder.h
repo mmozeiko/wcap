@@ -1,4 +1,5 @@
 #include "wcap.h"
+#include "wcap_config.h"
 
 #include <d3d11.h>
 #include <mfidl.h>
@@ -46,19 +47,12 @@ typedef struct Encoder {
 } Encoder;
 
 typedef struct {
-	BOOL FragmentedOutput;
-	BOOL HardwareEncoder;
 	DWORD Width;
 	DWORD Height;
-	DWORD MaxWidth;
-	DWORD MaxHeight;
 	DWORD FramerateNum;
 	DWORD FramerateDen;
-	DWORD VideoBitrate;
-
 	WAVEFORMATEX* AudioFormat;
-	DWORD AudioBitrate;
-
+	Config* Config;
 } EncoderConfig;
 
 void Encoder_Init(Encoder* Encoder, ID3D11Device* Device, ID3D11DeviceContext* Context);

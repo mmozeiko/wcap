@@ -7,26 +7,39 @@
 
 #define INI_SECTION L"wcap"
 
-#define ID_OK                         IDOK     // 1
-#define ID_CANCEL                     IDCANCEL // 2
-#define ID_SHOW_NOTIFICATIONS         3
-#define ID_OPEN_VIDEO_FOLDER          4
-#define ID_MOUSE_CURSOR               5
-#define ID_ONLY_CLIENT_AREA           6
-#define ID_CAPTURE_AUDIO              7
-#define ID_FRAGMENTED_MP4             8
-#define ID_HARDWARE_ENCODER           9
-#define ID_MAX_VIDEO_WIDTH_LABEL     10
-#define ID_MAX_VIDEO_WIDTH           11
-#define ID_MAX_VIDEO_HEIGHT_LABEL    12
-#define ID_MAX_VIDEO_HEIGHT          13
-#define ID_MAX_VIDEO_FRAMERATE_LABEL 14
-#define ID_MAX_VIDEO_FRAMERATE       15
-#define ID_VIDEO_BITRATE_LABEL       16
-#define ID_VIDEO_BITRATE             17
-#define ID_AUDIO_BITRATE_LABEL       18
-#define ID_AUDIO_BITRATE             19
+// control id's
+#define ID_OK                  IDOK     // 1
+#define ID_CANCEL              IDCANCEL // 2
+#define ID_DEFAULTS            3
+#define ID_SHOW_NOTIFICATIONS  10
+#define ID_MOUSE_CURSOR        20
+#define ID_ONLY_CLIENT_AREA    30
+#define ID_HARDWARE_ENCODER    40
+#define ID_CAPTURE_AUDIO       50
+#define ID_OUTPUT_FOLDER       60
+#define ID_OPEN_FOLDER         70
+#define ID_FRAGMENTED_MP4      80
+#define ID_LIMIT_LENGTH        90
+#define ID_LIMIT_SIZE          100
+#define ID_VIDEO_CODEC         110
+#define ID_VIDEO_PROFILE       120
+#define ID_VIDEO_MAX_WIDTH     130
+#define ID_VIDEO_MAX_HEIGHT    140
+#define ID_VIDEO_MAX_FRAMERATE 150
+#define ID_VIDEO_BITRATE       160
+#define ID_AUDIO_CODEC         170
+#define ID_AUDIO_CHANNELS      180
+#define ID_AUDIO_SAMPLERATE    190
+#define ID_AUDIO_BITRATE       200
 
+// control types
+#define ITEM_CHECKBOX (1<<0)
+#define ITEM_NUMBER   (1<<1)
+#define ITEM_COMBOBOX (1<<2)
+#define ITEM_FOLDER   (1<<3)
+#define ITEM_BUTTON   (1<<4)
+
+// win32 control styles
 #define CONTROL_BUTTON    0x0080
 #define CONTROL_EDIT      0x0081
 #define CONTROL_STATIC    0x0082
@@ -34,77 +47,267 @@
 #define CONTROL_SCROLLBAR 0x0084
 #define CONTROL_COMBOBOX  0x0085
 
-// these are only ones that MFT AAC encoder supports
-static const DWORD gAudioBitrates[] = { 96, 128, 160, 192 };
+// group box width/height
+#define COL00W 100
+#define COL01W 170
+#define COL10W 140
+#define COL11W 130
+#define ROW0H 86
+#define ROW1H 96
 
-static HWND gWindow;
+#define PADDING 4             // padding for dialog and group boxes
+#define BUTTON_WIDTH 50       // normal button width
+#define BUTTON_SMALL_WIDTH 14 // small button width
+#define ITEM_HEIGHT 14        // control item height
+
+// MFT encoder supported AAC bitrates & samplerates
+static const DWORD gAudioBitrates[] = { 96, 128, 160, 192, 0 };
+static const DWORD gAudioSamplerates[] = { 44100, 48000, 0 };
+
+static const LPCWSTR gVideoCodecs[] = { L"H264", L"H265", NULL };
+static const LPCWSTR gVideoProfiles[] = { L"Base", L"Main", L"High", NULL };
+static const LPCWSTR gAudioCodecs[] = { L"AAC", L"FLAC", NULL };
+
+// currently open dialog window
+static HWND gDialogWindow;
+
+static void Config__UpdateVideoProfiles(HWND Window, int Codec)
+{
+	SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_RESETCONTENT, 0, 0);
+
+	int Count = 0;
+	if (Codec == CONFIG_VIDEO_H264)
+	{
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_ADDSTRING, 0, (LPARAM)L"Base");
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_ADDSTRING, 0, (LPARAM)L"Main");
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_ADDSTRING, 0, (LPARAM)L"High");
+		Count = 3;
+	}
+	else if (Codec == CONFIG_VIDEO_H265)
+	{
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_ADDSTRING, 0, (LPARAM)L"Main");
+		Count = 1;
+	}
+
+	SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_SETCURSEL, Count - 1, 0);
+}
+
+static void Config__UpdateAudioBitrate(HWND Window, int Codec, Config* Config)
+{
+	if (Codec == CONFIG_AUDIO_AAC)
+	{
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_RESETCONTENT, 0, 0);
+		for (const DWORD* Bitrate = gAudioBitrates; *Bitrate; Bitrate++)
+		{
+			WCHAR Text[64];
+			wsprintfW(Text, L"%u", *Bitrate);
+			SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_ADDSTRING, 0, (LPARAM)Text);
+		}
+
+		WCHAR Text[64];
+		wsprintfW(Text, L"%u", Config->AudioBitrate);
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SELECTSTRING, -1, (LPARAM)Text);
+	}
+	else if (Codec == CONFIG_AUDIO_FLAC)
+	{
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_RESETCONTENT, 0, 0);
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_ADDSTRING, 0, (LPARAM)L"auto");
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SETCURSEL, 0, 0);
+		return;
+	}
+}
+
+static void Config__SetDialogValues(HWND Window, Config* Config)
+{
+	Config__UpdateVideoProfiles(Window, Config->VideoCodec);
+	Config__UpdateAudioBitrate(Window, Config->AudioCodec, Config);
+
+	// capture
+	CheckDlgButton(Window, ID_SHOW_NOTIFICATIONS, Config->ShowNotifications);
+	CheckDlgButton(Window, ID_MOUSE_CURSOR,       Config->MouseCursor);
+	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,   Config->OnlyClientArea);
+	CheckDlgButton(Window, ID_HARDWARE_ENCODER,   Config->HardwareEncoder);
+	CheckDlgButton(Window, ID_CAPTURE_AUDIO,      Config->CaptureAudio);
+
+	// output
+	SetDlgItemTextW(Window, ID_OUTPUT_FOLDER,  Config->OutputFolder);
+	CheckDlgButton(Window, ID_OPEN_FOLDER,     Config->OpenFolder);
+	CheckDlgButton(Window, ID_FRAGMENTED_MP4,  Config->FragmentedOutput);
+	CheckDlgButton(Window, ID_LIMIT_LENGTH,    Config->EnableLimitLength);
+	CheckDlgButton(Window, ID_LIMIT_SIZE,      Config->EnableLimitSize);
+	SetDlgItemInt(Window, ID_LIMIT_LENGTH + 1, Config->LimitLength, FALSE);
+	SetDlgItemInt(Window, ID_LIMIT_SIZE + 1,   Config->LimitSize,   FALSE);
+
+	// video
+	SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_SETCURSEL, Config->VideoCodec, 0);
+	if (Config->VideoCodec == CONFIG_VIDEO_H264)
+	{
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_SETCURSEL, Config->VideoProfile, 0);
+	}
+	else if (Config->VideoCodec == CONFIG_VIDEO_H265)
+	{
+		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_SETCURSEL, 0, 0);
+	}
+	SetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     Config->VideoMaxWidth,     FALSE);
+	SetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    Config->VideoMaxHeight,    FALSE);
+	SetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, Config->VideoMaxFramerate, FALSE);
+	SetDlgItemInt(Window, ID_VIDEO_BITRATE,       Config->VideoBitrate,      FALSE);
+
+	// audio
+	SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_SETCURSEL, Config->AudioCodec, 0);
+	SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_SETCURSEL, Config->AudioChannels - 1, 0);
+	WCHAR Text[64];
+	wsprintfW(Text, L"%u", Config->AudioSamplerate);
+	SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_SELECTSTRING, -1, (LPARAM)Text);
+
+	if (Config->AudioCodec == CONFIG_AUDIO_AAC)
+	{
+		wsprintfW(Text, L"%u", Config->AudioBitrate);
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SELECTSTRING, -1, (LPARAM)Text);
+	}
+	else if (Config->AudioCodec == CONFIG_AUDIO_FLAC)
+	{
+		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SETCURSEL, 0, 0);
+	}
+
+	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), Config->EnableLimitLength);
+	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   Config->EnableLimitSize);
+	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     Capture_CanHideMouseCursor());
+}
 
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_INITDIALOG)
 	{
-		Config* C = (Config*)LParam;
-		SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)C);
+		Config* Config = (struct Config*)LParam;
+		SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)Config);
 
-		CheckDlgButton(Window, ID_SHOW_NOTIFICATIONS,  C->ShowNotifications);
-		CheckDlgButton(Window, ID_OPEN_VIDEO_FOLDER,   C->OpenVideoFolder);
-		CheckDlgButton(Window, ID_MOUSE_CURSOR,        C->MouseCursor);
-		CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,    C->OnlyClientArea);
-		CheckDlgButton(Window, ID_CAPTURE_AUDIO ,      C->CaptureAudio);
-		CheckDlgButton(Window, ID_HARDWARE_ENCODER,    C->HardwareEncoder);
-		CheckDlgButton(Window, ID_FRAGMENTED_MP4,      C->FragmentedOutput);
-		SetDlgItemInt(Window,  ID_MAX_VIDEO_WIDTH,     C->MaxVideoWidth,     FALSE);
-		SetDlgItemInt(Window,  ID_MAX_VIDEO_HEIGHT,    C->MaxVideoHeight,    FALSE);
-		SetDlgItemInt(Window,  ID_MAX_VIDEO_FRAMERATE, C->MaxVideoFramerate, FALSE);
-		SetDlgItemInt(Window,  ID_VIDEO_BITRATE,       C->VideoBitrate,      FALSE);
+		SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"H264 / AVC");
+		SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"H265 / HEVC");
 
-		HWND AudioBitrate = GetDlgItem(Window, ID_AUDIO_BITRATE);
-		for (int i = 0; i < _countof(gAudioBitrates); i++)
-		{
-			WCHAR Text[64];
-			wsprintfW(Text, L"%u", gAudioBitrates[i]);
-			SendMessageW(AudioBitrate, CB_ADDSTRING, 0, (LPARAM)Text);
-		}
+		SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"AAC");
+		SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"FLAC");
 
-		WCHAR Text[64];
-		wsprintfW(Text, L"%u", C->AudioBitrate);
-		SendMessageW(AudioBitrate, CB_SELECTSTRING, -1, (LPARAM)Text);
+		SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_ADDSTRING, 0, (LPARAM)L"1");
+		SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_ADDSTRING, 0, (LPARAM)L"2");
+
+		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"44100");
+		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"48000");
+
+		Config__SetDialogValues(Window, Config);
 
 		SetForegroundWindow(Window);
-		gWindow = Window;
+		gDialogWindow = Window;
 		return TRUE;
 	}
 	else if (Message == WM_DESTROY)
 	{
-		gWindow = NULL;
+		gDialogWindow = NULL;
 	}
 	else if (Message == WM_COMMAND)
 	{
-		if (LOWORD(WParam) == ID_OK)
+		Config* Config = (struct Config*)GetWindowLongPtrW(Window, GWLP_USERDATA);
+		int Control = LOWORD(WParam);
+		if (Control == ID_OK)
 		{
-			Config* C = (Config*)GetWindowLongPtrW(Window, GWLP_USERDATA);
-			C->ShowNotifications = IsDlgButtonChecked(Window, ID_SHOW_NOTIFICATIONS);
-			C->OpenVideoFolder   = IsDlgButtonChecked(Window, ID_OPEN_VIDEO_FOLDER);
-			C->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
-			C->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
-			C->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
-			C->HardwareEncoder   = IsDlgButtonChecked(Window, ID_HARDWARE_ENCODER);
-			C->FragmentedOutput  = IsDlgButtonChecked(Window, ID_FRAGMENTED_MP4);
-			C->MaxVideoWidth     = GetDlgItemInt(Window,      ID_MAX_VIDEO_WIDTH,     NULL, FALSE);
-			C->MaxVideoHeight    = GetDlgItemInt(Window,      ID_MAX_VIDEO_HEIGHT,    NULL, FALSE);
-			C->MaxVideoFramerate = GetDlgItemInt(Window,      ID_MAX_VIDEO_FRAMERATE, NULL, FALSE);
-			C->VideoBitrate      = GetDlgItemInt(Window,      ID_VIDEO_BITRATE,       NULL, FALSE);
-
-			HWND AudioBitrate = GetDlgItem(Window, ID_AUDIO_BITRATE);
-			LRESULT AudioBitrateIndex = SendMessageW(AudioBitrate, CB_GETCURSEL, 0, 0);
-			C->AudioBitrate = gAudioBitrates[AudioBitrateIndex];
+			// capture
+			Config->ShowNotifications = IsDlgButtonChecked(Window, ID_SHOW_NOTIFICATIONS);
+			Config->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
+			Config->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
+			Config->HardwareEncoder   = IsDlgButtonChecked(Window, ID_HARDWARE_ENCODER);
+			Config->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
+			// output
+			GetDlgItemTextW(Window, ID_OUTPUT_FOLDER, Config->OutputFolder, _countof(Config->OutputFolder));
+			Config->OpenFolder        = IsDlgButtonChecked(Window, ID_OPEN_FOLDER);
+			Config->FragmentedOutput  = IsDlgButtonChecked(Window, ID_FRAGMENTED_MP4);
+			Config->EnableLimitLength = IsDlgButtonChecked(Window, ID_LIMIT_LENGTH);
+			Config->EnableLimitSize   = IsDlgButtonChecked(Window, ID_LIMIT_SIZE);
+			Config->LimitLength       = GetDlgItemInt(Window,      ID_LIMIT_LENGTH + 1, NULL, FALSE);
+			Config->LimitSize         = GetDlgItemInt(Window,      ID_LIMIT_SIZE + 1,   NULL, FALSE);
+			// video
+			Config->VideoCodec        = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_CODEC,   CB_GETCURSEL, 0, 0);
+			if (Config->VideoCodec == CONFIG_VIDEO_H264)
+			{
+				Config->VideoProfile = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_GETCURSEL, 0, 0);
+			}
+			Config->VideoMaxWidth     = GetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     NULL, FALSE);
+			Config->VideoMaxHeight    = GetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    NULL, FALSE);
+			Config->VideoMaxFramerate = GetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, NULL, FALSE);
+			Config->VideoBitrate      = GetDlgItemInt(Window, ID_VIDEO_BITRATE,       NULL, FALSE);
+			// audio
+			Config->AudioCodec      = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CODEC,    CB_GETCURSEL, 0, 0);
+			Config->AudioChannels   = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_GETCURSEL, 0, 0) + 1;
+			Config->AudioSamplerate = gAudioSamplerates[SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_GETCURSEL, 0, 0)];
+			if (Config->AudioCodec == CONFIG_AUDIO_AAC)
+			{
+				Config->AudioBitrate = gAudioBitrates[SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_GETCURSEL, 0, 0)];
+			}
 
 			EndDialog(Window, TRUE);
 			return TRUE;
 		}
-		else if (LOWORD(WParam) == ID_CANCEL)
+		else if (Control == ID_CANCEL)
 		{
 			EndDialog(Window, FALSE);
+			return TRUE;
+		}
+		else if (Control == ID_DEFAULTS)
+		{
+			Config_Defaults(Config);
+			Config__SetDialogValues(Window, Config);
+			return TRUE;
+		}
+		else if (Control == ID_VIDEO_CODEC && HIWORD(WParam) == CBN_SELCHANGE)
+		{
+			LRESULT Index = SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_GETCURSEL, 0, 0);
+			Config__UpdateVideoProfiles(Window, (int)Index);
+			return TRUE;
+		}
+		else if (Control == ID_AUDIO_CODEC && HIWORD(WParam) == CBN_SELCHANGE)
+		{
+			LRESULT Index = SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_GETCURSEL, 0, 0);
+			Config__UpdateAudioBitrate(Window, (int)Index, Config);
+			return TRUE;
+		}
+		else if (Control == ID_LIMIT_LENGTH && HIWORD(WParam) == BN_CLICKED)
+		{
+			EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_LENGTH, BM_GETCHECK, 0, 0));
+			return TRUE;
+		}
+		else if (Control == ID_LIMIT_SIZE && HIWORD(WParam) == BN_CLICKED)
+		{
+			EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1), (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_SIZE, BM_GETCHECK, 0, 0));
+			return TRUE;
+		}
+		else if (Control == ID_OUTPUT_FOLDER + 1)
+		{
+			// this expects called has called CoInitializeEx with single or apartment-threaded model
+			IFileDialog* Dialog;
+			HR(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC, &IID_IFileDialog, &Dialog));
+
+			WCHAR Text[MAX_PATH];
+			GetDlgItemTextW(Window, ID_OUTPUT_FOLDER, Text, _countof(Text));
+
+			IShellItem* Folder;
+			if (SUCCEEDED(SHCreateItemFromParsingName(Text, NULL, &IID_IShellItem, &Folder)))
+			{
+				HR(IFileDialog_SetFolder(Dialog, Folder));
+				IShellItem_Release(Folder);
+			}
+
+			HR(IFileDialog_SetOptions(Dialog, FOS_NOCHANGEDIR | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST));
+			if (SUCCEEDED(IFileDialog_Show(Dialog, Window)) && SUCCEEDED(IFileDialog_GetResult(Dialog, &Folder)))
+			{
+				LPWSTR Path;
+				if (SUCCEEDED(IShellItem_GetDisplayName(Folder, SIGDN_FILESYSPATH, &Path)))
+				{
+					SetDlgItemTextW(Window, ID_OUTPUT_FOLDER, Path);
+					CoTaskMemFree(Path);
+				}
+				IShellItem_Release(Folder);
+			}
+			IFileDialog_Release(Dialog);
+
 			return TRUE;
 		}
 	}
@@ -112,22 +315,30 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 }
 
 typedef struct {
+	int Left;
+	int Top;
+	int Width;
+	int Height;
+} Config__DialogRect;
+
+typedef struct {
 	const char* Text;
 	const WORD Id;
-	const WORD Control;
-	const DWORD Style;
+	const WORD Item;
+	const DWORD Width;
 } Config__DialogItem;
 
 typedef struct {
-	int Width;
-	const Config__DialogItem* Rows;
-} Config__DialogColumn;
+	const char* Caption;
+	const Config__DialogRect Rect;
+	const Config__DialogItem* Items;
+} Config__DialogGroup;
 
 typedef struct {
 	const char* Title;
-	WORD FontSize;
 	const char* Font;
-	const Config__DialogColumn* Columns;
+	const WORD FontSize;
+	const Config__DialogGroup* Groups;
 } Config__DialogLayout;
 
 static void* Config__Align(BYTE* Data, SIZE_T Size)
@@ -136,18 +347,18 @@ static void* Config__Align(BYTE* Data, SIZE_T Size)
 	return Data + ((Pointer + Size - 1) & ~(Size - 1)) - Pointer;
 }
 
-static BYTE* Config__DoDialogItem(BYTE* Data, const Config__DialogItem* Item, int x, int y, int w, int h)
+static BYTE* Config__DoDialogItem(BYTE* Data, LPCSTR Text, WORD Id, WORD Control, DWORD Style, int x, int y, int w, int h)
 {
 	Data = Config__Align(Data, sizeof(DWORD));
 
 	*(DLGITEMTEMPLATE*)Data = (DLGITEMTEMPLATE)
 	{
-		.style = Item->Style | WS_CHILD | WS_VISIBLE | (Item->Control == CONTROL_STATIC ? 0 : WS_TABSTOP),
+		.style = Style | WS_CHILD | WS_VISIBLE,
 		.x = x,
-		.y = y + (Item->Control == CONTROL_STATIC ? 2 : 0),
+		.y = y + (Control == CONTROL_STATIC ? 2 : 0),
 		.cx = w,
-		.cy = h - (Item->Control == CONTROL_EDIT ? 2 : 0) - (Item->Control == CONTROL_STATIC ? 2 : 0),
-		.id = Item->Id,
+		.cy = h - (Control == CONTROL_EDIT ? 2 : 0) - (Control == CONTROL_STATIC ? 2 : 0),
+		.id = Id,
 	};
 	Data += sizeof(DLGITEMTEMPLATE);
 
@@ -155,12 +366,12 @@ static BYTE* Config__DoDialogItem(BYTE* Data, const Config__DialogItem* Item, in
 	Data = Config__Align(Data, sizeof(WORD));
 	*(WORD*)Data = 0xffff;
 	Data += sizeof(WORD);
-	*(WORD*)Data = Item->Control;
+	*(WORD*)Data = Control;
 	Data += sizeof(WORD);
 
 	// item text
 	Data = Config__Align(Data, sizeof(WCHAR));
-	DWORD ItemChars = MultiByteToWideChar(CP_UTF8, 0, Item->Text, -1, (WCHAR*)Data, 128);
+	DWORD ItemChars = MultiByteToWideChar(CP_UTF8, 0, Text, -1, (WCHAR*)Data, 128);
 	Data += ItemChars * sizeof(WCHAR);
 
 	// create extras
@@ -204,196 +415,333 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	DWORD FontChars = MultiByteToWideChar(CP_UTF8, 0, Layout->Font, -1, (WCHAR*)Data, 128);
 	Data += FontChars * sizeof(WCHAR);
 
-	const int DialogPadding = 4;
-	const int ButtonWidth = 50;
-	const int RowHeight = 14;
+	int ItemCount = 3;
 
-	int x = DialogPadding;
-
-	int MaxY = 0;
-	int ItemCount = 0;
-
-	static const Config__DialogItem OkButton     = { "OK",     ID_OK,     CONTROL_BUTTON, BS_DEFPUSHBUTTON };
-	static const Config__DialogItem CancelButton = { "Cancel", ID_CANCEL, CONTROL_BUTTON, BS_PUSHBUTTON    };
-
-	ItemCount += 2;
+	int ButtonX = PADDING + COL10W + COL11W + PADDING - 3 * (PADDING + BUTTON_WIDTH);
+	int ButtonY = PADDING + ROW0H + ROW1H + PADDING;
 
 	DLGITEMTEMPLATE* OkData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, &OkButton, 0, 0, ButtonWidth, RowHeight - 2);
+	Data = Config__DoDialogItem(Data, "OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	ButtonX += BUTTON_WIDTH + PADDING;
 
 	DLGITEMTEMPLATE* CancelData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, &CancelButton, 0, 0, ButtonWidth, RowHeight - 2);
+	Data = Config__DoDialogItem(Data, "Cancel", ID_CANCEL, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	ButtonX += BUTTON_WIDTH + PADDING;
 
-	for (int c = 0; Layout->Columns[c].Width; c++)
+	DLGITEMTEMPLATE* DefaultsData = Config__Align(Data, sizeof(DWORD));
+	Data = Config__DoDialogItem(Data, "Defaults", ID_DEFAULTS, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	ButtonX += BUTTON_WIDTH + PADDING;
+
+	for (const Config__DialogGroup* Group = Layout->Groups; Group->Caption; Group++)
 	{
-		const Config__DialogColumn* Column = &Layout->Columns[c];
+		int X = Group->Rect.Left + PADDING;
+		int Y = Group->Rect.Top + PADDING;
+		int W = Group->Rect.Width;
+		int H = Group->Rect.Height;
 
-		int y = DialogPadding;
-		for (int r = 0; Column->Rows[r].Text; r++)
+		Data = Config__DoDialogItem(Data, Group->Caption, -1, CONTROL_BUTTON, BS_GROUPBOX, X, Y, W, H);
+		ItemCount++;
+
+		X += PADDING;
+		Y += ITEM_HEIGHT - PADDING;
+		W -= 2 * PADDING;
+
+		for (const Config__DialogItem* Item = Group->Items; Item->Text; Item++)
 		{
-			const Config__DialogItem* Item = &Column->Rows[r];
+			int HasCheckbox = !!(Item->Item & ITEM_CHECKBOX);
+			int HasNumber   = !!(Item->Item & ITEM_NUMBER);
+			int HasCombobox = !!(Item->Item & ITEM_COMBOBOX);
+			int OnlyCheckbox = !(Item->Item & ~ITEM_CHECKBOX);
 
-			if (Item->Text[0] != 0)
+			int ItemX = X;
+			int ItemW = W;
+			int ItemId = Item->Id;
+
+			if (HasCombobox || HasNumber && !HasCheckbox)
 			{
+				// label, only for number without checkbox, or combobox
+				Data = Config__DoDialogItem(Data, Item->Text, -1, CONTROL_STATIC, 0, ItemX, Y, Item->Width, ITEM_HEIGHT);
 				ItemCount++;
+				ItemX += Item->Width + PADDING;
+				ItemW -= Item->Width + PADDING;
+			}
 
-				Data = Config__DoDialogItem(Data, Item, x, y, Column->Width, RowHeight);
-				if (Item->Control == CONTROL_STATIC)
+			if (HasCheckbox)
+			{
+				if (!OnlyCheckbox)
 				{
-					ItemCount++;
-					Data = Config__DoDialogItem(Data, &Column[1].Rows[r], x + Column->Width, y, Column[1].Width, RowHeight);
+					// reduce width so checbox can fit other control on the right
+					ItemW = Item->Width;
+				}
+				Data = Config__DoDialogItem(Data, Item->Text, ItemId, CONTROL_BUTTON, WS_TABSTOP | BS_AUTOCHECKBOX, ItemX, Y, ItemW, ITEM_HEIGHT);
+				ItemCount++;
+				ItemId++;
+				if (!OnlyCheckbox)
+				{
+					ItemX += Item->Width + PADDING;
+					ItemW = W - (Item->Width + PADDING);
 				}
 			}
-			y += RowHeight;
+
+			if (HasNumber)
+			{
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER | ES_RIGHT | ES_NUMBER, ItemX, Y, ItemW, ITEM_HEIGHT);
+				ItemCount++;
+			}
+
+			if (HasCombobox)
+			{
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_COMBOBOX, WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, ItemX, Y, ItemW, ITEM_HEIGHT);
+				ItemCount++;
+			}
+
+			if (Item->Item & ITEM_FOLDER)
+			{
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
+				ItemCount++;
+				ItemId++;
+
+				Data = Config__DoDialogItem(Data, "...", ItemId, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, X + W - BUTTON_SMALL_WIDTH + 2, Y + 1, BUTTON_SMALL_WIDTH - 4, ITEM_HEIGHT - 3);
+				ItemCount++;
+			}
+
+			Y += ITEM_HEIGHT;
 		}
-		x += Column->Width;
-		MaxY = max(MaxY, y);
 	}
-
-	OkData->x = x - 2 * ButtonWidth - DialogPadding;
-	OkData->y = MaxY - RowHeight + 2;
-
-	CancelData->x = x - ButtonWidth;
-	CancelData->y = MaxY - RowHeight + 2;
-
-	x += DialogPadding;
-	MaxY += DialogPadding;
 
 	*Dialog = (DLGTEMPLATE)
 	{
 		.style = DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU,
 		.cdit = ItemCount,
-		.cx = x,
-		.cy = MaxY,
+		.cx = PADDING + COL10W + PADDING + COL11W + PADDING,
+		.cy = PADDING + ROW0H + PADDING + ROW1H + ITEM_HEIGHT + PADDING,
 	};
 
 	Assert(Data <= End);
 }
 
-void Config_Load(Config* Config, LPCWSTR FileName)
+void Config_Defaults(Config* Config)
 {
-	LPCWSTR wcap = L"wcap";
-
-	Config->ShowNotifications = GetPrivateProfileIntW(INI_SECTION, L"ShowNotifications", TRUE,  FileName) != 0;
-	Config->OpenVideoFolder   = GetPrivateProfileIntW(INI_SECTION, L"OpenVideoFolder",   TRUE,  FileName) != 0;
-	Config->MouseCursor       = GetPrivateProfileIntW(INI_SECTION, L"MouseCursor",       TRUE,  FileName) != 0;
-	Config->OnlyClientArea    = GetPrivateProfileIntW(INI_SECTION, L"OnlyClientArea",    TRUE,  FileName) != 0;
-	Config->CaptureAudio      = GetPrivateProfileIntW(INI_SECTION, L"CaptureAudio",      TRUE,  FileName) != 0;
-	Config->FragmentedOutput  = GetPrivateProfileIntW(INI_SECTION, L"FragmentedOutput",  FALSE, FileName) != 0;
-	Config->HardwareEncoder   = GetPrivateProfileIntW(INI_SECTION, L"HardwareEncoder",   TRUE,  FileName) != 0;
-	Config->MaxVideoWidth     = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoWidth",     0,     FileName);
-	Config->MaxVideoHeight    = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoHeight",    0,     FileName);
-	Config->MaxVideoFramerate = GetPrivateProfileIntW(INI_SECTION, L"MaxVideoFramerate", 60,    FileName);
-	Config->VideoBitrate      = GetPrivateProfileIntW(INI_SECTION, L"VideoBitrate",      8000,  FileName);
-	Config->AudioBitrate      = GetPrivateProfileIntW(INI_SECTION, L"AudioBitrate",      160,   FileName);
-
-	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", NULL, Config->OutputFolder, _countof(Config->OutputFolder), FileName);
-	if (Config->OutputFolder[0] == 0)
+	*Config = (struct Config)
 	{
-		// by default output to user's Video folder
-		LPWSTR VideoFolder;
-		HR(SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, NULL, &VideoFolder));
-		StrCpyNW(Config->OutputFolder, VideoFolder, _countof(Config->OutputFolder));
-		CoTaskMemFree(VideoFolder);
+		// capture
+		.ShowNotifications = TRUE,
+		.MouseCursor = TRUE,
+		.OnlyClientArea = TRUE,
+		.HardwareEncoder = TRUE,
+		.CaptureAudio = TRUE,
+		// output
+		.OpenFolder = TRUE,
+		.FragmentedOutput = FALSE,
+		.EnableLimitLength = FALSE,
+		.EnableLimitSize = FALSE,
+		.LimitLength = 60,
+		.LimitSize = 8,
+		// video
+		.VideoCodec = CONFIG_VIDEO_H264,
+		.VideoProfile = CONFIG_VIDEO_HIGH,
+		.VideoMaxWidth = 1920,
+		.VideoMaxHeight = 1080,
+		.VideoMaxFramerate = 60,
+		.VideoBitrate = 8000,
+		// audio
+		.AudioCodec = CONFIG_AUDIO_AAC,
+		.AudioChannels = 2,
+		.AudioSamplerate = 48000,
+		.AudioBitrate = 160,
+	};
+
+	LPWSTR VideoFolder;
+	HR(SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, NULL, &VideoFolder));
+	StrCpyNW(Config->OutputFolder, VideoFolder, _countof(Config->OutputFolder));
+	CoTaskMemFree(VideoFolder);
+}
+
+static void Config__GetBool(LPCWSTR FileName, LPCWSTR Key, BOOL* Value)
+{
+	int Data = GetPrivateProfileIntW(INI_SECTION, Key, -1, FileName);
+	if (Data >= 0)
+	{
+		*Value = Data != 0;
 	}
+}
 
-	// check for valid audio bitrates
-	for (int i = 0; i < _countof(gAudioBitrates); i++)
+static void Config__GetInt(LPCWSTR FileName, LPCWSTR Key, DWORD* Value, const DWORD* AllowedList)
+{
+	int Data = GetPrivateProfileIntW(INI_SECTION, Key, -1, FileName);
+	if (Data >= 0)
 	{
-		if (Config->AudioBitrate == gAudioBitrates[i])
+		if (AllowedList)
 		{
-			return;
+			for (const DWORD* Allowed = AllowedList; *Allowed; ++Allowed)
+			{
+				if (*Allowed == Data)
+				{
+					*Value = Data;
+					break;
+				}
+			}
+		}
+		else
+		{
+			*Value = Data;
 		}
 	}
-	Config->AudioBitrate = 160;
+}
+static void Config__GetStr(LPCWSTR FileName, LPCWSTR Key, DWORD* Value, const LPCWSTR* AllowedList)
+{
+	WCHAR Text[64];
+	GetPrivateProfileStringW(INI_SECTION, Key, L"", Text, _countof(Text), FileName);
+	if (Text[0])
+	{
+		for (const LPCWSTR* Allowed = AllowedList; *Allowed; ++Allowed)
+		{
+			if (StrCmpW(Text, *Allowed) == 0)
+			{
+				*Value = (DWORD)(Allowed - AllowedList);
+				return;
+			}
+		}
+	}
+}
+
+void Config_Load(Config* Config, LPCWSTR FileName)
+{
+	// capture
+	Config__GetBool(FileName, L"ShowNotifications", &Config->ShowNotifications);
+	Config__GetBool(FileName, L"MouseCursor", &Config->MouseCursor);
+	Config__GetBool(FileName, L"OnlyClientArea", &Config->OnlyClientArea);
+	Config__GetBool(FileName, L"HardwareEncoder", &Config->HardwareEncoder);
+	Config__GetBool(FileName, L"CaptureAudio", &Config->CaptureAudio);
+	// output
+	WCHAR OutputFolder[MAX_PATH];
+	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", L"", OutputFolder, _countof(OutputFolder), FileName);
+	if (OutputFolder[0]) StrCpyW(Config->OutputFolder, OutputFolder);
+	Config__GetBool(FileName, L"OpenFolder", &Config->OpenFolder);
+	Config__GetBool(FileName, L"FragmentedOutput", &Config->FragmentedOutput);
+	Config__GetBool(FileName, L"EnableLimitLength", &Config->EnableLimitLength);
+	Config__GetBool(FileName, L"EnableLimitSize", &Config->EnableLimitSize);
+	Config__GetInt(FileName,  L"LimitLength", &Config->LimitLength, NULL);
+	Config__GetInt(FileName,  L"LimitSize", &Config->LimitSize, NULL);
+	// video
+	Config__GetStr(FileName, L"VideoCodec", &Config->VideoCodec, gVideoCodecs);
+	Config__GetStr(FileName, L"VideoProfile", &Config->VideoProfile, gVideoProfiles);
+	Config__GetInt(FileName, L"VideoMaxWidth", &Config->VideoMaxWidth, NULL);
+	Config__GetInt(FileName, L"VideoMaxHeight", &Config->VideoMaxHeight, NULL);
+	Config__GetInt(FileName, L"VideoMaxFramerate", &Config->VideoMaxFramerate, NULL);
+	Config__GetInt(FileName, L"VideoBitrate", &Config->VideoBitrate, NULL);
+	// audio
+	Config__GetStr(FileName, L"AudioCodec", &Config->AudioCodec, gAudioCodecs);
+	Config__GetInt(FileName, L"AudioChannels", &Config->AudioChannels, (DWORD[]) { 1, 2, 0 });
+	Config__GetInt(FileName, L"AudioSamplerate", &Config->AudioSamplerate, gAudioSamplerates);
+	Config__GetInt(FileName, L"AudioBitrate", &Config->AudioBitrate, gAudioBitrates);
+}
+
+static Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
+{
+	WCHAR Text[64];
+	wsprintfW(Text, L"%u", Value);
+	WritePrivateProfileStringW(INI_SECTION, Key, Text, FileName);
 }
 
 void Config_Save(Config* Config, LPCWSTR FileName)
 {
-	LPCWSTR wcap = L"wcap";
-
+	// capture
 	WritePrivateProfileStringW(INI_SECTION, L"ShowNotifications", Config->ShowNotifications ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"OpenVideoFolder",   Config->OpenVideoFolder   ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",       Config->MouseCursor       ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",    Config->OnlyClientArea    ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",      Config->CaptureAudio      ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"FragmentedOutput",  Config->FragmentedOutput  ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",   Config->HardwareEncoder   ? L"1" : L"0", FileName);
-
-	WCHAR Text[64];
-
-	wsprintfW(Text, L"%u", Config->MaxVideoWidth);
-	WritePrivateProfileStringW(INI_SECTION, L"MaxVideoWidth", Text, FileName);
-
-	wsprintfW(Text, L"%u", Config->MaxVideoHeight);
-	WritePrivateProfileStringW(INI_SECTION, L"MaxVideoHeight", Text, FileName);
-
-	wsprintfW(Text, L"%u", Config->MaxVideoFramerate);
-	WritePrivateProfileStringW(INI_SECTION, L"MaxVideoFramerate", Text, FileName);
-
-	wsprintfW(Text, L"%u", Config->VideoBitrate);
-	WritePrivateProfileStringW(INI_SECTION, L"VideoBitrate", Text, FileName);
-
-	wsprintfW(Text, L"%u", Config->AudioBitrate);
-	WritePrivateProfileStringW(INI_SECTION, L"AudioBitrate", Text, FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",      Config->CaptureAudio      ? L"1" : L"0", FileName);
+	// output
+	WritePrivateProfileStringW(INI_SECTION, L"OutputFolder",      Config->OutputFolder, FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"OpenFolder",        Config->OpenFolder        ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"FragmentedOutput",  Config->FragmentedOutput  ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"EnableLimitLength", Config->EnableLimitLength ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"EnableLimitSize",   Config->EnableLimitSize   ? L"1" : L"0", FileName);
+	Config__WriteInt(FileName, L"LimitLength", Config->LimitLength);
+	Config__WriteInt(FileName, L"LimitSize", Config->LimitSize);
+	// video
+	WritePrivateProfileStringW(INI_SECTION, L"VideoCodec",   gVideoCodecs[Config->VideoCodec],     FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"VideoProfile", gVideoProfiles[Config->VideoProfile], FileName);
+	Config__WriteInt(FileName, L"VideoMaxWidth",     Config->VideoMaxWidth);
+	Config__WriteInt(FileName, L"VideoMaxHeight",    Config->VideoMaxHeight);
+	Config__WriteInt(FileName, L"VideoMaxFramerate", Config->VideoMaxFramerate);
+	Config__WriteInt(FileName, L"VideoBitrate",      Config->VideoBitrate);
+	// audio
+	WritePrivateProfileStringW(INI_SECTION, L"AudioCodec",    gAudioCodecs[Config->AudioCodec], FileName);
+	Config__WriteInt(FileName, L"AudioChannels",   Config->AudioChannels);
+	Config__WriteInt(FileName, L"AudioSamplerate", Config->AudioSamplerate);
+	Config__WriteInt(FileName, L"AudioBitrate",    Config->AudioBitrate);
 }
 
 BOOL Config_ShowDialog(Config* Config, HWND Window)
 {
-	if (gWindow)
+	if (gDialogWindow)
 	{
-		SetForegroundWindow(gWindow);
+		SetForegroundWindow(gDialogWindow);
 		return FALSE;
 	}
-
-	DWORD MouseCursorStyle = (Capture_CanHideMouseCursor() ? 0 : WS_DISABLED) | BS_AUTOCHECKBOX;
 
 	Config__DialogLayout Dialog = (Config__DialogLayout)
 	{
 		.Title = "wcap Settings",
-		.FontSize = 9,
 		.Font = "Segoe UI",
-		.Columns = (Config__DialogColumn[])
+		.FontSize = 9,
+		.Groups = (Config__DialogGroup[])
 		{
 			{
-				.Width = 90,
-				.Rows = (Config__DialogItem[])
+				.Caption = "Capture",
+				.Rect = { 0, 0, COL00W, ROW0H },
+				.Items = (Config__DialogItem[])
 				{
-					{ "Show &Notifications", ID_SHOW_NOTIFICATIONS, CONTROL_BUTTON, BS_AUTOCHECKBOX  },
-					{ "O&pen Video Folder",  ID_OPEN_VIDEO_FOLDER,  CONTROL_BUTTON, BS_AUTOCHECKBOX  },
-					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       CONTROL_BUTTON, MouseCursorStyle },
-					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   CONTROL_BUTTON, BS_AUTOCHECKBOX  },
-					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      CONTROL_BUTTON, BS_AUTOCHECKBOX  },
-					{ "Fragmented MP&4",     ID_FRAGMENTED_MP4,     CONTROL_BUTTON, BS_AUTOCHECKBOX  },
-					{ "Hardware &Encoder",   ID_HARDWARE_ENCODER,   CONTROL_BUTTON, BS_AUTOCHECKBOX  },
+					{ "Show &Notifications", ID_SHOW_NOTIFICATIONS, ITEM_CHECKBOX },
+					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       ITEM_CHECKBOX },
+					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   ITEM_CHECKBOX },
+					{ "Hardware &Encoder",   ID_HARDWARE_ENCODER,   ITEM_CHECKBOX },
+					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      ITEM_CHECKBOX },
 					{ NULL },
 				},
 			},
 			{
-				.Width = 72,
-				.Rows = (Config__DialogItem[])
+				.Caption = "&Output",
+				.Rect = { COL00W + PADDING, 0, COL01W, ROW0H },
+				.Items = (Config__DialogItem[])
 				{
-					{ "Max Video &Width",        ID_MAX_VIDEO_WIDTH_LABEL,     CONTROL_STATIC, SS_LEFT },
-					{ "Max Video &Height",       ID_MAX_VIDEO_HEIGHT_LABEL,    CONTROL_STATIC, SS_LEFT },
-					{ "Max Video &Framerate",    ID_MAX_VIDEO_FRAMERATE_LABEL, CONTROL_STATIC, SS_LEFT },
-					{ "&Video Bitrate (kbit/s)", ID_VIDEO_BITRATE_LABEL,       CONTROL_STATIC, SS_LEFT },
-					{ "&Audio Bitrate (kbit/s)", ID_AUDIO_BITRATE_LABEL,       CONTROL_STATIC, SS_LEFT },
+					{ "",                        ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
+					{ "O&pen When Finished",     ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
+					{ "Fragmented MP&4",         ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
+					{ "Limit &Length (seconds)", ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ "Limit &Size (MB)",        ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
 					{ NULL },
 				},
 			},
 			{
-				.Width = 40,
-				.Rows = (Config__DialogItem[])
+				.Caption = "&Video",
+				.Rect = { 0, ROW0H, COL10W, ROW1H },
+				.Items = (Config__DialogItem[])
 				{
-					{ "", ID_MAX_VIDEO_WIDTH,     CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_MAX_VIDEO_HEIGHT,    CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_MAX_VIDEO_FRAMERATE, CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_VIDEO_BITRATE,       CONTROL_EDIT,     WS_BORDER | ES_RIGHT | ES_NUMBER },
-					{ "", ID_AUDIO_BITRATE,       CONTROL_COMBOBOX, CBS_DROPDOWNLIST },
+					{ "Codec",             ID_VIDEO_CODEC,         ITEM_COMBOBOX, 60 },
+					{ "Profile",           ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 60 },
+					{ "Max &Width",        ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   60 },
+					{ "Max &Height",       ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   60 },
+					{ "Max &Framerate",    ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   60 },
+					{ "Bitrate (kbit/s)",  ID_VIDEO_BITRATE,       ITEM_NUMBER,   60 },
 					{ NULL },
 				},
 			},
-			{ 0 },
+			{
+				.Caption = "&Audio",
+				.Rect = { COL10W + PADDING, ROW0H, COL11W, ROW1H },
+				.Items = (Config__DialogItem[])
+				{
+					{ "Codec",            ID_AUDIO_CODEC,      ITEM_COMBOBOX, 60 },
+					{ "Channels",         ID_AUDIO_CHANNELS,   ITEM_COMBOBOX, 60 },
+					{ "Samplerate",       ID_AUDIO_SAMPLERATE, ITEM_COMBOBOX, 60 },
+					{ "Bitrate (kbit/s)", ID_AUDIO_BITRATE,    ITEM_COMBOBOX, 60 },
+					{ NULL },
+				},
+			},
+			{ NULL },
 		},
 	};
 

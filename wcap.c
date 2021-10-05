@@ -73,6 +73,7 @@ static HFONT gFont;
 static HFONT gFontBold;
 
 // recording state
+static BOOL gRecordingStarted;
 static BOOL gRecording;
 static DWORD gRecordingLimitFramerate;
 static DWORD gRecordingDroppedFrames;
@@ -189,11 +190,11 @@ static void StartRecording(LPCWSTR Caption)
 
 	DWORD FramerateNum = Info.rateCompose.uiNumerator;
 	DWORD FramerateDen = Info.rateCompose.uiDenominator;
-	if (gConfig.MaxVideoFramerate > 0 && gConfig.MaxVideoFramerate * FramerateDen < FramerateNum)
+	if (gConfig.VideoMaxFramerate > 0 && gConfig.VideoMaxFramerate * FramerateDen < FramerateNum)
 	{
 		// limit rate only if max framerate is specified and it is lower than compositor framerate
-		gRecordingLimitFramerate = gConfig.MaxVideoFramerate;
-		FramerateNum = gConfig.MaxVideoFramerate;
+		gRecordingLimitFramerate = gConfig.VideoMaxFramerate;
+		FramerateNum = gConfig.VideoMaxFramerate;
 		FramerateDen = 1;
 	}
 	else
@@ -203,15 +204,11 @@ static void StartRecording(LPCWSTR Caption)
 
 	EncoderConfig EncConfig =
 	{
-		.FragmentedOutput = gConfig.FragmentedOutput,
-		.HardwareEncoder = gConfig.HardwareEncoder,
 		.Width = gCapture.Rect.right - gCapture.Rect.left,
 		.Height = gCapture.Rect.bottom - gCapture.Rect.top,
-		.MaxWidth = gConfig.MaxVideoWidth,
-		.MaxHeight = gConfig.MaxVideoHeight,
 		.FramerateNum = FramerateNum,
 		.FramerateDen = FramerateDen,
-		.VideoBitrate = gConfig.VideoBitrate,
+		.Config = &gConfig,
 	};
 
 	if (gConfig.CaptureAudio)
@@ -222,12 +219,15 @@ static void StartRecording(LPCWSTR Caption)
 			Capture_Stop(&gCapture);
 			return;
 		}
-		EncConfig.AudioBitrate = gConfig.AudioBitrate;
 		EncConfig.AudioFormat = gAudio.Format;
 	}
 
 	if (!Encoder_Start(&gEncoder, gRecordingPath, &EncConfig))
 	{
+		if (gConfig.CaptureAudio)
+		{
+			Audio_Stop(&gAudio);
+		}
 		Capture_Stop(&gCapture);
 		return;
 	}
@@ -315,7 +315,7 @@ static void StopRecording(void)
 
 	Capture_Stop(&gCapture);
 	Encoder_Stop(&gEncoder);
-	if (gConfig.OpenVideoFolder)
+	if (gConfig.OpenFolder)
 	{
 		ShowFileInFolder(gRecordingPath);
 	}
@@ -864,21 +864,27 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		{
 			StopRecording();
 		}
-		else
+		else if (!gRecordingStarted)
 		{
 			if (gRectContext == NULL)
 			{
 				if (WParam == HOT_RECORD_WINDOW)
 				{
+					gRecordingStarted = TRUE;
 					CaptureWindow();
+					gRecordingStarted = FALSE;
 				}
 				else if (WParam == HOT_RECORD_MONITOR)
 				{
+					gRecordingStarted = TRUE;
 					CaptureMonitor();
+					gRecordingStarted = FALSE;
 				}
 				else if (WParam == HOT_RECORD_RECT)
 				{
+					gRecordingStarted = TRUE;
 					CaptureRectangleInit();
+					gRecordingStarted = FALSE;
 				}
 			}
 		}
@@ -1112,6 +1118,37 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 		}
 	}
 
+	if (gConfig.EnableLimitLength || gConfig.EnableLimitSize)
+	{
+		BOOL Stop = FALSE;
+
+		if (gConfig.EnableLimitLength)
+		{
+			if (Time - gEncoder.StartTime >= (UINT64)(gConfig.LimitLength * gTickFreq.QuadPart))
+			{
+				Stop = TRUE;
+			}
+		}
+		if (gConfig.EnableLimitSize && !Stop)
+		{
+			UINT64 FileSize;
+			DWORD Bitrate, LengthMsec;
+			Encoder_GetStats(&gEncoder, &Bitrate, &LengthMsec, &FileSize);
+
+			// reserve 0.5% for mp4 format overhead (probably an overestimate)
+			if (1000 * FileSize >= (995ULL * gConfig.LimitSize) << 20)
+			{
+				Stop = TRUE;
+			}
+		}
+
+		if (Stop)
+		{
+			PostMessageW(gWindow, WM_WCAP_STOP_CAPTURE, 0, 0);
+			return;
+		}
+	}
+
 	// update tray title with stats once every second
 	if (gRecordingNextTooltip == 0)
 	{
@@ -1165,6 +1202,9 @@ void WinMainCRTStartup()
 	GetModuleFileNameW(NULL, gConfigPath, _countof(gConfigPath));
 	PathRenameExtensionW(gConfigPath, L".ini");
 
+	HR(CoInitializeEx(0, COINIT_APARTMENTTHREADED));
+
+	Config_Defaults(&gConfig);
 	Config_Load(&gConfig, gConfigPath);
 	Audio_Init(&gAudio);
 	Capture_Init(&gCapture, Device, &OnCaptureClose, &OnCaptureFrame);

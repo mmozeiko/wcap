@@ -45,9 +45,11 @@ static DWORD WINAPI Audio__PlayThread(LPVOID Arg)
 		if (FrameCount != 0)
 		{
 			BYTE* Data;
-			HR(IAudioRenderClient_GetBuffer(Render, FrameCount, &Data));
-			ZeroMemory(Data, FrameCount * FrameSize);
-			HR(IAudioRenderClient_ReleaseBuffer(Render, FrameCount, 0));
+			if (SUCCEEDED(IAudioRenderClient_GetBuffer(Render, FrameCount, &Data)))
+			{
+				ZeroMemory(Data, FrameCount * FrameSize);
+				IAudioRenderClient_ReleaseBuffer(Render, FrameCount, 0);
+			}
 		}
 	}
 
@@ -59,7 +61,7 @@ static DWORD WINAPI Audio__PlayThread(LPVOID Arg)
 
 void Audio_Init(Audio* Audio)
 {
-	HR(CoInitializeEx(0, COINIT_MULTITHREADED));
+	// this expects called has called CoInitializeEx
 	HR(CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (LPVOID*)&Audio->Enumerator));
 }
 

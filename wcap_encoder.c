@@ -6,9 +6,6 @@
 #include <codecapi.h>
 #include <wmcodecdsp.h>
 
-#define ENCODER_AUDIO_SAMPLE_RATE 48000 // or 44100
-#define ENCODER_AUDIO_CHANNELS    2
-
 #define MFT64(high, low) (((UINT64)high << 32) | (low))
 
 static HRESULT STDMETHODCALLTYPE Encoder__QueryInterface(IMFAsyncCallback* this, REFIID riid, void** Object)
@@ -155,8 +152,8 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 {
 	DWORD InputWidth = Config->Width;
 	DWORD InputHeight = Config->Height;
-	DWORD OutputWidth = Config->MaxWidth;
-	DWORD OutputHeight = Config->MaxHeight;
+	DWORD OutputWidth = Config->Config->VideoMaxWidth;
+	DWORD OutputHeight = Config->Config->VideoMaxHeight;
 
 	if (OutputWidth != 0 && OutputHeight == 0)
 	{
@@ -236,11 +233,12 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 	// output file
 	{
-		const GUID* Container = Config->FragmentedOutput ? &MFTranscodeContainerType_FMPEG4 : &MFTranscodeContainerType_MPEG4;
+		const GUID* Container = Config->Config->FragmentedOutput && Config->Config->VideoCodec == CONFIG_VIDEO_H264
+			? &MFTranscodeContainerType_FMPEG4 : &MFTranscodeContainerType_MPEG4;
 
 		IMFAttributes* Attributes;
 		HR(MFCreateAttributes(&Attributes, 4));
-		HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, Config->HardwareEncoder));
+		HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, Config->Config->HardwareEncoder));
 		HR(IMFAttributes_SetUnknown(Attributes, &MF_SINK_WRITER_D3D_MANAGER, (IUnknown*)Encoder->Manager));
 		HR(IMFAttributes_SetUINT32(Attributes, &MF_SINK_WRITER_DISABLE_THROTTLING, TRUE));
 		HR(IMFAttributes_SetGUID(Attributes, &MF_TRANSCODE_CONTAINERTYPE, Container));
@@ -257,27 +255,41 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 	// video output type
 	{
+		const GUID* Codec;
+		UINT32 Profile;
+		if (Config->Config->VideoCodec == CONFIG_VIDEO_H264)
+		{
+			Codec = &MFVideoFormat_H264;
+			Profile = ((UINT32[]){ eAVEncH264VProfile_Base, eAVEncH264VProfile_Main, eAVEncH264VProfile_High })[Config->Config->VideoProfile];
+		}
+		else
+		{
+			Codec = &MFVideoFormat_HEVC;
+			Profile = eAVEncH265VProfile_Main_420_8;
+		}
+
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
-		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFVideoFormat_H264));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_0_255));
+		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, Codec));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_MPEG2_PROFILE, Profile));
+		// TODO: these don't really work with builtin Video Processor MFT, probably will to convert manually...
+		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
+		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
+		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_0_255));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_AVG_BITRATE, Config->VideoBitrate * 1000));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_AVG_BITRATE, Config->Config->VideoBitrate * 1000));
 
 		hr = IMFSinkWriter_AddStream(Writer, Type, &Encoder->VideoStreamIndex);
 		IMFMediaType_Release(Type);
 
 		if (FAILED(hr))
 		{
-			MessageBoxW(NULL, L"Cannot configure H264 encoder output!", WCAP_TITLE, MB_ICONERROR);
+			MessageBoxW(NULL, L"Cannot configure video encoder!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
 	}
@@ -296,7 +308,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 		if (FAILED(hr))
 		{
-			MessageBoxW(NULL, L"Cannot configure H264 encoder input!", WCAP_TITLE, MB_ICONERROR);
+			MessageBoxW(NULL, L"Cannot configure video encoder input!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
 	}
@@ -311,7 +323,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		ICodecAPI_SetValue(Codec, &CODECAPI_AVEncCommonRateControlMode, &RateControl);
 
 		// VBR bitrate to use, some MFT encoders override MF_MT_AVG_BITRATE setting with this one
-		VARIANT Bitrate = { .vt = VT_UI4, .ulVal = Config->VideoBitrate * 1000 };
+		VARIANT Bitrate = { .vt = VT_UI4, .ulVal = Config->Config->VideoBitrate * 1000 };
 		ICodecAPI_SetValue(Codec, &CODECAPI_AVEncCommonMeanBitRate, &Bitrate);
 
 		// set GOP size to 4 seconds
@@ -347,8 +359,8 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 			WAVEFORMATEX Format =
 			{
 				.wFormatTag = WAVE_FORMAT_PCM,
-				.nChannels = ENCODER_AUDIO_CHANNELS,
-				.nSamplesPerSec = ENCODER_AUDIO_SAMPLE_RATE,
+				.nChannels = (WORD)Config->Config->AudioChannels,
+				.nSamplesPerSec = Config->Config->AudioSamplerate,
 				.wBitsPerSample = sizeof(short) * 8,
 			};
 			Format.nBlockAlign = Format.nChannels * Format.wBitsPerSample / 8;
@@ -365,21 +377,26 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 		// audio output type
 		{
+			const GUID* Codec = &((GUID[]){ MFAudioFormat_AAC, MFAudioFormat_FLAC })[Config->Config->AudioCodec];
+
 			IMFMediaType* Type;
 			HR(MFCreateMediaType(&Type));
 			HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio));
-			HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFAudioFormat_AAC));
+			HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, Codec));
 			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_BITS_PER_SAMPLE, 16));
-			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, ENCODER_AUDIO_SAMPLE_RATE));
-			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_NUM_CHANNELS, ENCODER_AUDIO_CHANNELS));
-			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_AVG_BYTES_PER_SECOND, Config->AudioBitrate * 1000 / 8));
+			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, Config->Config->AudioSamplerate));
+			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_NUM_CHANNELS, Config->Config->AudioChannels));
+			if (Config->Config->AudioCodec == CONFIG_AUDIO_AAC)
+			{
+				HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_AVG_BYTES_PER_SECOND, Config->Config->AudioBitrate * 1000 / 8));
+			}
 
 			hr = IMFSinkWriter_AddStream(Writer, Type, &Encoder->AudioStreamIndex);
 			IMFMediaType_Release(Type);
 
 			if (FAILED(hr))
 			{
-				MessageBoxW(NULL, L"Cannot configure AAC encoder output!", WCAP_TITLE, MB_ICONERROR);
+				MessageBoxW(NULL, L"Cannot configure audio encoder output!", WCAP_TITLE, MB_ICONERROR);
 				goto bail;
 			}
 		}
@@ -391,15 +408,15 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 			HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio));
 			HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFAudioFormat_PCM));
 			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_BITS_PER_SAMPLE, 16));
-			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, ENCODER_AUDIO_SAMPLE_RATE));
-			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_NUM_CHANNELS, ENCODER_AUDIO_CHANNELS));
+			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, Config->Config->AudioSamplerate));
+			HR(IMFMediaType_SetUINT32(Type, &MF_MT_AUDIO_NUM_CHANNELS, Config->Config->AudioChannels));
 
 			hr = IMFSinkWriter_SetInputMediaType(Writer, Encoder->AudioStreamIndex, Type, NULL);
 			IMFMediaType_Release(Type);
 
 			if (FAILED(hr))
 			{
-				MessageBoxW(NULL, L"Cannot configure AAC encoder input!", WCAP_TITLE, MB_ICONERROR);
+				MessageBoxW(NULL, L"Cannot configure audio encoder input!", WCAP_TITLE, MB_ICONERROR);
 				goto bail;
 			}
 		}
@@ -498,7 +515,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 			HR(MFCreateTrackedSample(&Tracked));
 			HR(IMFTrackedSample_QueryInterface(Tracked, &IID_IMFSample, (LPVOID*)&Sample));
-			HR(MFCreateMemoryBuffer(1024 * ENCODER_AUDIO_CHANNELS * sizeof(short), &Buffer));
+			HR(MFCreateMemoryBuffer(Config->Config->AudioSamplerate * Config->Config->AudioChannels * sizeof(short), &Buffer));
 			HR(IMFSample_AddBuffer(Sample, Buffer));
 			IMFMediaBuffer_Release(Buffer);
 
@@ -666,9 +683,16 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UIN
 void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize)
 {
 	MF_SINK_WRITER_STATISTICS Stats = { .cb = sizeof(Stats) };
-	HR(IMFSinkWriter_GetStatistics(Encoder->Writer, 0, &Stats));
+	HR(IMFSinkWriter_GetStatistics(Encoder->Writer, Encoder->VideoStreamIndex, &Stats));
 
 	*Bitrate = (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, 10000000, 1000 * Stats.llLastTimestampProcessed, 0);
 	*LengthMsec = (DWORD)(Stats.llLastTimestampProcessed / 10000);
 	*FileSize = Stats.qwByteCountProcessed;
+
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		HR(IMFSinkWriter_GetStatistics(Encoder->Writer, Encoder->AudioStreamIndex, &Stats));
+		*Bitrate += (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, 10000000, 1000 * Stats.llLastTimestampProcessed, 0);
+		*FileSize += Stats.qwByteCountProcessed;
+	}
 }
