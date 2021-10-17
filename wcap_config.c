@@ -53,8 +53,8 @@
 
 // group box width/height
 #define COL00W 100
-#define COL01W 170
-#define COL10W 140
+#define COL01W 174
+#define COL10W 144
 #define COL11W 130
 #define ROW0H 86
 #define ROW1H 96
@@ -81,7 +81,7 @@ struct {
 	WNDPROC WindowProc;
 	Config* Config;
 	int Control;
-} gConfigShorcut;
+} gConfigShortcut;
 
 static void Config__UpdateVideoProfiles(HWND Window, int Codec)
 {
@@ -270,17 +270,17 @@ static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM W
 
 			WCHAR Text[64];
 			Config__FormatKey(Shortcut, Text);
-			SetDlgItemTextW(gDialogWindow, gConfigShorcut.Control, Text);
+			SetDlgItemTextW(gDialogWindow, gConfigShortcut.Control, Text);
 			SetWindowLongW(Window, GWLP_USERDATA, Shortcut);
 
-			SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)gConfigShorcut.WindowProc);
-			gConfigShorcut.Control = 0;
+			SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)gConfigShortcut.WindowProc);
+			gConfigShortcut.Control = 0;
 			EnableHotKeys();
 			return FALSE;
 		}
 	}
 
-	return gConfigShorcut.WindowProc(Window, Message, WParam, LParam);
+	return gConfigShortcut.WindowProc(Window, Message, WParam, LParam);
 }
 
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
@@ -306,7 +306,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 
 		SetForegroundWindow(Window);
 		gDialogWindow = Window;
-		gConfigShorcut.Control = 0;
+		gConfigShortcut.Control = 0;
 		return TRUE;
 	}
 	else if (Message == WM_DESTROY)
@@ -368,10 +368,10 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		{
 			Config_Defaults(Config);
 			Config__SetDialogValues(Window, Config);
-			if (gConfigShorcut.Control)
+			if (gConfigShortcut.Control)
 			{
-				SetWindowLongPtrW(GetDlgItem(Window, gConfigShorcut.Control), GWLP_WNDPROC, (LONG_PTR)gConfigShorcut.WindowProc);
-				gConfigShorcut.Control = 0;
+				SetWindowLongPtrW(GetDlgItem(Window, gConfigShortcut.Control), GWLP_WNDPROC, (LONG_PTR)gConfigShortcut.WindowProc);
+				gConfigShortcut.Control = 0;
 				EnableHotKeys();
 			}
 			return TRUE;
@@ -433,15 +433,15 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		          Control == ID_SHORTCUT_WINDOW ||
 		          Control == ID_SHORTCUT_RECT) && HIWORD(WParam) == BN_CLICKED)
 		{
-			if (gConfigShorcut.Control == 0)
+			if (gConfigShortcut.Control == 0)
 			{
 				SetDlgItemTextW(Window, Control, L"Press new shortcut, [ESC] to cancel, [BACKSPACE] to disable");
 
-				gConfigShorcut.Control = Control;
-				gConfigShorcut.Config = Config;
+				gConfigShortcut.Control = Control;
+				gConfigShortcut.Config = Config;
 
 				HWND ControlWindow = GetDlgItem(Window, Control);
-				gConfigShorcut.WindowProc = (WNDPROC)GetWindowLongPtrW(ControlWindow, GWLP_WNDPROC);
+				gConfigShortcut.WindowProc = (WNDPROC)GetWindowLongPtrW(ControlWindow, GWLP_WNDPROC);
 				SetWindowLongPtrW(ControlWindow, GWLP_WNDPROC, (LONG_PTR)&Config__ShortcutProc);
 				DisableHotKeys();
 			}
@@ -692,7 +692,7 @@ void Config_Defaults(Config* Config)
 		.AudioChannels = 2,
 		.AudioSamplerate = 48000,
 		.AudioBitrate = 160,
-		// shorcuts
+		// shortcuts
 		.ShortcutMonitor = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL),
 		.ShortcutWindow = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_WIN),
 		.ShortcutRect = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_SHIFT),
@@ -875,12 +875,12 @@ BOOL Config_ShowDialog(Config* Config)
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Codec",             ID_VIDEO_CODEC,         ITEM_COMBOBOX, 60 },
-					{ "Profile",           ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 60 },
-					{ "Max &Width",        ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   60 },
-					{ "Max &Height",       ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   60 },
-					{ "Max &Framerate",    ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   60 },
-					{ "Bitrate (kbit/s)",  ID_VIDEO_BITRATE,       ITEM_NUMBER,   60 },
+					{ "Codec",             ID_VIDEO_CODEC,         ITEM_COMBOBOX, 64 },
+					{ "Profile",           ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 64 },
+					{ "Max &Width",        ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   64 },
+					{ "Max &Height",       ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   64 },
+					{ "Max &Framerate",    ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   64 },
+					{ "Bitrate (kbit/s)",  ID_VIDEO_BITRATE,       ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},
@@ -901,9 +901,9 @@ BOOL Config_ShowDialog(Config* Config)
 				.Rect = { 0, ROW0H + PADDING + ROW1H, COL00W + PADDING + COL01W, ROW2H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Capture Monitor",   ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 60 },
-					{ "Capture Window",    ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 60 },
-					{ "Capture Rectangle", ID_SHORTCUT_RECT,    ITEM_HOTKEY, 60 },
+					{ "Capture Monitor",   ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
+					{ "Capture Window",    ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
+					{ "Capture Rectangle", ID_SHORTCUT_RECT,    ITEM_HOTKEY, 64 },
 					{ NULL },
 				},
 			},
