@@ -554,7 +554,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	int ItemCount = 3;
 
 	int ButtonX = PADDING + COL10W + COL11W + PADDING - 3 * (PADDING + BUTTON_WIDTH);
-	int ButtonY = PADDING + ROW0H + PADDING + ROW1H + PADDING + ROW2H;
+	int ButtonY = PADDING + ROW0H + ROW1H + ROW2H + PADDING;
 
 	DLGITEMTEMPLATE* OkData = Config__Align(Data, sizeof(DWORD));
 	Data = Config__DoDialogItem(Data, "OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
@@ -657,7 +657,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 		.style = DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU,
 		.cdit = ItemCount,
 		.cx = PADDING + COL10W + PADDING + COL11W + PADDING,
-		.cy = PADDING + ROW0H + PADDING + ROW1H + PADDING + ROW2H + ITEM_HEIGHT + PADDING,
+		.cy = PADDING + ROW0H + PADDING + ROW1H + PADDING + ROW2H + ITEM_HEIGHT,
 	};
 
 	Assert(Data <= End);
@@ -898,7 +898,7 @@ BOOL Config_ShowDialog(Config* Config)
 			},
 			{
 				.Caption = "Shor&tcuts",
-				.Rect = { 0, ROW0H + PADDING + ROW1H, COL00W + PADDING + COL01W, ROW2H },
+				.Rect = { 0, ROW0H + ROW1H, COL00W + PADDING + COL01W, ROW2H },
 				.Items = (Config__DialogItem[])
 				{
 					{ "Capture Monitor",   ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
