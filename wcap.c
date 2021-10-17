@@ -585,20 +585,36 @@ static int GetPointResize(int X, int Y)
 	return WCAP_RESIZE_NONE;
 }
 
+void DisableHotKeys(void)
+{
+	UnregisterHotKey(gWindow, HOT_RECORD_MONITOR);
+	UnregisterHotKey(gWindow, HOT_RECORD_WINDOW);
+	UnregisterHotKey(gWindow, HOT_RECORD_RECT);
+}
+
+BOOL EnableHotKeys(void)
+{
+	BOOL Success = TRUE;
+	if (gConfig.ShortcutMonitor)
+	{
+		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_MONITOR, HOT_GET_MOD(gConfig.ShortcutMonitor), HOT_GET_KEY(gConfig.ShortcutMonitor));
+	}
+	if (gConfig.ShortcutWindow)
+	{
+		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_WINDOW, HOT_GET_MOD(gConfig.ShortcutWindow), HOT_GET_KEY(gConfig.ShortcutWindow));
+	}
+	if (gConfig.ShortcutRect)
+	{
+		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_RECT, HOT_GET_MOD(gConfig.ShortcutRect), HOT_GET_KEY(gConfig.ShortcutRect));
+	}
+	return Success;
+}
+
 static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_CREATE)
 	{
 		HR(BufferedPaintInit());
-
-		BOOL Success1 = RegisterHotKey(Window, HOT_RECORD_WINDOW,  MOD_CONTROL | MOD_WIN,   VK_SNAPSHOT);
-		BOOL Success2 = RegisterHotKey(Window, HOT_RECORD_MONITOR, MOD_CONTROL,             VK_SNAPSHOT);
-		BOOL Success3 = RegisterHotKey(Window, HOT_RECORD_RECT,    MOD_CONTROL | MOD_SHIFT, VK_SNAPSHOT);
-		if (!Success1 || !Success2 || !Success3)
-		{
-			MessageBoxW(NULL, L"Cannot register wcap keyboard shortcuts!", WCAP_TITLE, MB_ICONERROR);
-			return -1;
-		}
 		AddTrayIcon(Window);
 		return 0;
 	}
@@ -833,9 +849,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 			}
 			else if (Command == CMD_SETTINGS)
 			{
-				if (Config_ShowDialog(&gConfig, Window))
+				if (Config_ShowDialog(&gConfig))
 				{
 					Config_Save(&gConfig, gConfigPath);
+					DisableHotKeys();
+					EnableHotKeys();
 				}
 			}
 
@@ -845,9 +863,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		{
 			if (!gRecording)
 			{
-				if (Config_ShowDialog(&gConfig, Window))
+				if (Config_ShowDialog(&gConfig))
 				{
 					Config_Save(&gConfig, gConfigPath);
+					DisableHotKeys();
+					EnableHotKeys();
 				}
 			}
 		}
@@ -1247,6 +1267,12 @@ void WinMainCRTStartup()
 	if (!gWindow)
 	{
 		ExitProcess(0);
+	}
+	if (!EnableHotKeys())
+	{
+		MessageBoxW(NULL,
+			L"Cannot register wcap keyboard shortcuts.\nSome other application might already use shorcuts.\nPlease check & adjust the settings!",
+			WCAP_TITLE, MB_ICONEXCLAMATION);
 	}
 
 	for (;;)

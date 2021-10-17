@@ -31,6 +31,9 @@
 #define ID_AUDIO_CHANNELS      180
 #define ID_AUDIO_SAMPLERATE    190
 #define ID_AUDIO_BITRATE       200
+#define ID_SHORTCUT_MONITOR    210
+#define ID_SHORTCUT_WINDOW     220
+#define ID_SHORTCUT_RECT       230
 
 // control types
 #define ITEM_CHECKBOX (1<<0)
@@ -38,6 +41,7 @@
 #define ITEM_COMBOBOX (1<<2)
 #define ITEM_FOLDER   (1<<3)
 #define ITEM_BUTTON   (1<<4)
+#define ITEM_HOTKEY   (1<<5)
 
 // win32 control styles
 #define CONTROL_BUTTON    0x0080
@@ -54,6 +58,7 @@
 #define COL11W 130
 #define ROW0H 86
 #define ROW1H 96
+#define ROW2H 56
 
 #define PADDING 4             // padding for dialog and group boxes
 #define BUTTON_WIDTH 50       // normal button width
@@ -70,6 +75,13 @@ static const LPCWSTR gAudioCodecs[] = { L"AAC", L"FLAC", NULL };
 
 // currently open dialog window
 static HWND gDialogWindow;
+
+// current control to set shortcut
+struct {
+	WNDPROC WindowProc;
+	Config* Config;
+	int Control;
+} gConfigShorcut;
 
 static void Config__UpdateVideoProfiles(HWND Window, int Codec)
 {
@@ -115,6 +127,32 @@ static void Config__UpdateAudioBitrate(HWND Window, int Codec, Config* Config)
 		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SETCURSEL, 0, 0);
 		return;
 	}
+}
+
+static void Config__FormatKey(DWORD KeyMod, WCHAR* Text)
+{
+	if (KeyMod == 0)
+	{
+		StrCpyW(Text, L"[none]");
+		return;
+	}
+
+	DWORD Mod = HOT_GET_MOD(KeyMod);
+
+	Text[0] = 0;
+	if (Mod & MOD_CONTROL) StrCatW(Text, L"Ctrl + ");
+	if (Mod & MOD_WIN)     StrCatW(Text, L"Win + ");
+	if (Mod & MOD_ALT)     StrCatW(Text, L"Alt + ");
+	if (Mod & MOD_SHIFT)   StrCatW(Text, L"Shift + ");
+
+	WCHAR KeyText[32];
+	UINT ScanCode = MapVirtualKeyW(HOT_GET_KEY(KeyMod), MAPVK_VK_TO_VSC);
+	if (GetKeyNameTextW(ScanCode << 16, KeyText, _countof(KeyText)) == 0)
+	{
+		wsprintfW(KeyText, L"[0x%02x]", HOT_GET_KEY(KeyMod));
+	}
+
+	StrCatW(Text, KeyText);
 }
 
 static void Config__SetDialogValues(HWND Window, Config* Config)
@@ -170,9 +208,79 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SETCURSEL, 0, 0);
 	}
 
+	// shortcuts
+	Config__FormatKey(Config->ShortcutMonitor, Text);
+	SetDlgItemTextW(Window, ID_SHORTCUT_MONITOR, Text);
+	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_MONITOR), GWLP_USERDATA, Config->ShortcutMonitor);
+	Config__FormatKey(Config->ShortcutWindow, Text);
+	SetDlgItemTextW(Window, ID_SHORTCUT_WINDOW, Text);
+	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW), GWLP_USERDATA, Config->ShortcutWindow);
+	Config__FormatKey(Config->ShortcutRect, Text);
+	SetDlgItemTextW(Window, ID_SHORTCUT_RECT, Text);
+	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT), GWLP_USERDATA, Config->ShortcutRect);
+
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), Config->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   Config->EnableLimitSize);
 	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     Capture_CanHideMouseCursor());
+}
+
+void DisableHotKeys(void);
+void EnableHotKeys(void);
+
+static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
+{
+	if (Message == WM_GETDLGCODE)
+	{
+		return DLGC_WANTALLKEYS;
+	}
+
+	if (Message == WM_KEYDOWN || Message == WM_SYSKEYDOWN)
+	{
+		return TRUE;
+	}
+
+	if (Message == WM_KEYUP || Message == WM_SYSKEYUP)
+	{
+		if (WParam != VK_LCONTROL &&  WParam != VK_RCONTROL && WParam != VK_CONTROL &&
+			WParam != VK_LSHIFT && WParam != VK_RSHIFT && WParam != VK_SHIFT &&
+			WParam != VK_LMENU && WParam != VK_RMENU && WParam != VK_MENU &&
+			WParam != VK_LWIN && WParam != VK_RWIN)
+		{
+			DWORD Shortcut;
+			if (WParam == VK_ESCAPE)
+			{
+				Shortcut = GetWindowLongW(Window, GWLP_USERDATA);
+			}
+			else if (WParam == VK_BACK)
+			{
+				Shortcut = 0;
+			}
+			else
+			{
+				DWORD VirtualKey = (DWORD)WParam;
+				DWORD Mods = 0
+					| ((GetKeyState(VK_CONTROL) >> 15) ? MOD_CONTROL : 0)
+					| ((GetKeyState(VK_LWIN) >> 15)    ? MOD_WIN     : 0)
+					| ((GetKeyState(VK_RWIN) >> 15)    ? MOD_WIN     : 0)
+					| ((GetKeyState(VK_MENU) >> 15)    ? MOD_ALT     : 0)
+					| ((GetKeyState(VK_SHIFT) >> 15)   ? MOD_SHIFT   : 0);
+
+				Shortcut = HOT_KEY(VirtualKey, Mods);
+			}
+
+			WCHAR Text[64];
+			Config__FormatKey(Shortcut, Text);
+			SetDlgItemTextW(gDialogWindow, gConfigShorcut.Control, Text);
+			SetWindowLongW(Window, GWLP_USERDATA, Shortcut);
+
+			SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)gConfigShorcut.WindowProc);
+			gConfigShorcut.Control = 0;
+			EnableHotKeys();
+			return FALSE;
+		}
+	}
+
+	return gConfigShorcut.WindowProc(Window, Message, WParam, LParam);
 }
 
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
@@ -198,6 +306,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 
 		SetForegroundWindow(Window);
 		gDialogWindow = Window;
+		gConfigShorcut.Control = 0;
 		return TRUE;
 	}
 	else if (Message == WM_DESTROY)
@@ -242,6 +351,10 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			{
 				Config->AudioBitrate = gAudioBitrates[SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_GETCURSEL, 0, 0)];
 			}
+			//shortcuts
+			Config->ShortcutMonitor = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_MONITOR), GWLP_USERDATA);
+			Config->ShortcutWindow  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW),  GWLP_USERDATA);
+			Config->ShortcutRect    = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT),    GWLP_USERDATA);
 
 			EndDialog(Window, TRUE);
 			return TRUE;
@@ -255,6 +368,12 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		{
 			Config_Defaults(Config);
 			Config__SetDialogValues(Window, Config);
+			if (gConfigShorcut.Control)
+			{
+				SetWindowLongPtrW(GetDlgItem(Window, gConfigShorcut.Control), GWLP_WNDPROC, (LONG_PTR)gConfigShorcut.WindowProc);
+				gConfigShorcut.Control = 0;
+				EnableHotKeys();
+			}
 			return TRUE;
 		}
 		else if (Control == ID_VIDEO_CODEC && HIWORD(WParam) == CBN_SELCHANGE)
@@ -281,7 +400,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		}
 		else if (Control == ID_OUTPUT_FOLDER + 1)
 		{
-			// this expects called has called CoInitializeEx with single or apartment-threaded model
+			// this expects caller has called CoInitializeEx with single or apartment-threaded model
 			IFileDialog* Dialog;
 			HR(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC, &IID_IFileDialog, &Dialog));
 
@@ -309,6 +428,23 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			IFileDialog_Release(Dialog);
 
 			return TRUE;
+		}
+		else if ((Control == ID_SHORTCUT_MONITOR ||
+		          Control == ID_SHORTCUT_WINDOW ||
+		          Control == ID_SHORTCUT_RECT) && HIWORD(WParam) == BN_CLICKED)
+		{
+			if (gConfigShorcut.Control == 0)
+			{
+				SetDlgItemTextW(Window, Control, L"Press new shortcut, [ESC] to cancel, [BACKSPACE] to disable");
+
+				gConfigShorcut.Control = Control;
+				gConfigShorcut.Config = Config;
+
+				HWND ControlWindow = GetDlgItem(Window, Control);
+				gConfigShorcut.WindowProc = (WNDPROC)GetWindowLongPtrW(ControlWindow, GWLP_WNDPROC);
+				SetWindowLongPtrW(ControlWindow, GWLP_WNDPROC, (LONG_PTR)&Config__ShortcutProc);
+				DisableHotKeys();
+			}
 		}
 	}
 	return FALSE;
@@ -418,7 +554,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	int ItemCount = 3;
 
 	int ButtonX = PADDING + COL10W + COL11W + PADDING - 3 * (PADDING + BUTTON_WIDTH);
-	int ButtonY = PADDING + ROW0H + ROW1H + PADDING;
+	int ButtonY = PADDING + ROW0H + PADDING + ROW1H + PADDING + ROW2H;
 
 	DLGITEMTEMPLATE* OkData = Config__Align(Data, sizeof(DWORD));
 	Data = Config__DoDialogItem(Data, "OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
@@ -448,18 +584,19 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 
 		for (const Config__DialogItem* Item = Group->Items; Item->Text; Item++)
 		{
-			int HasCheckbox = !!(Item->Item & ITEM_CHECKBOX);
-			int HasNumber   = !!(Item->Item & ITEM_NUMBER);
-			int HasCombobox = !!(Item->Item & ITEM_COMBOBOX);
+			int HasCheckbox  = !!(Item->Item & ITEM_CHECKBOX);
+			int HasNumber    = !!(Item->Item & ITEM_NUMBER);
+			int HasCombobox  = !!(Item->Item & ITEM_COMBOBOX);
 			int OnlyCheckbox = !(Item->Item & ~ITEM_CHECKBOX);
+			int HasHotKey    = !!(Item->Item & ITEM_HOTKEY);
 
 			int ItemX = X;
 			int ItemW = W;
 			int ItemId = Item->Id;
 
-			if (HasCombobox || HasNumber && !HasCheckbox)
+			if (HasCombobox || (HasNumber || HasHotKey) && !HasCheckbox)
 			{
-				// label, only for number without checkbox, or combobox
+				// label, only for controls without checkbox, or combobox
 				Data = Config__DoDialogItem(Data, Item->Text, -1, CONTROL_STATIC, 0, ItemX, Y, Item->Width, ITEM_HEIGHT);
 				ItemCount++;
 				ItemX += Item->Width + PADDING;
@@ -489,6 +626,12 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 				ItemCount++;
 			}
 
+			if (HasHotKey)
+			{
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_BUTTON, WS_TABSTOP, ItemX, Y, ItemW, ITEM_HEIGHT);
+				ItemCount++;
+			}
+
 			if (HasCombobox)
 			{
 				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_COMBOBOX, WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, ItemX, Y, ItemW, ITEM_HEIGHT);
@@ -514,7 +657,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 		.style = DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU,
 		.cdit = ItemCount,
 		.cx = PADDING + COL10W + PADDING + COL11W + PADDING,
-		.cy = PADDING + ROW0H + PADDING + ROW1H + ITEM_HEIGHT + PADDING,
+		.cy = PADDING + ROW0H + PADDING + ROW1H + PADDING + ROW2H + ITEM_HEIGHT + PADDING,
 	};
 
 	Assert(Data <= End);
@@ -549,6 +692,10 @@ void Config_Defaults(Config* Config)
 		.AudioChannels = 2,
 		.AudioSamplerate = 48000,
 		.AudioBitrate = 160,
+		// shorcuts
+		.ShortcutMonitor = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL),
+		.ShortcutWindow = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_WIN),
+		.ShortcutRect = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_SHIFT),
 	};
 
 	LPWSTR VideoFolder;
@@ -609,32 +756,36 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 {
 	// capture
 	Config__GetBool(FileName, L"ShowNotifications", &Config->ShowNotifications);
-	Config__GetBool(FileName, L"MouseCursor", &Config->MouseCursor);
-	Config__GetBool(FileName, L"OnlyClientArea", &Config->OnlyClientArea);
-	Config__GetBool(FileName, L"HardwareEncoder", &Config->HardwareEncoder);
-	Config__GetBool(FileName, L"CaptureAudio", &Config->CaptureAudio);
+	Config__GetBool(FileName, L"MouseCursor",       &Config->MouseCursor);
+	Config__GetBool(FileName, L"OnlyClientArea",    &Config->OnlyClientArea);
+	Config__GetBool(FileName, L"HardwareEncoder",   &Config->HardwareEncoder);
+	Config__GetBool(FileName, L"CaptureAudio",      &Config->CaptureAudio);
 	// output
 	WCHAR OutputFolder[MAX_PATH];
 	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", L"", OutputFolder, _countof(OutputFolder), FileName);
 	if (OutputFolder[0]) StrCpyW(Config->OutputFolder, OutputFolder);
-	Config__GetBool(FileName, L"OpenFolder", &Config->OpenFolder);
-	Config__GetBool(FileName, L"FragmentedOutput", &Config->FragmentedOutput);
+	Config__GetBool(FileName, L"OpenFolder",        &Config->OpenFolder);
+	Config__GetBool(FileName, L"FragmentedOutput",  &Config->FragmentedOutput);
 	Config__GetBool(FileName, L"EnableLimitLength", &Config->EnableLimitLength);
-	Config__GetBool(FileName, L"EnableLimitSize", &Config->EnableLimitSize);
-	Config__GetInt(FileName,  L"LimitLength", &Config->LimitLength, NULL);
-	Config__GetInt(FileName,  L"LimitSize", &Config->LimitSize, NULL);
+	Config__GetBool(FileName, L"EnableLimitSize",   &Config->EnableLimitSize);
+	Config__GetInt(FileName,  L"LimitLength",       &Config->LimitLength, NULL);
+	Config__GetInt(FileName,  L"LimitSize",         &Config->LimitSize,   NULL);
 	// video
-	Config__GetStr(FileName, L"VideoCodec", &Config->VideoCodec, gVideoCodecs);
-	Config__GetStr(FileName, L"VideoProfile", &Config->VideoProfile, gVideoProfiles);
-	Config__GetInt(FileName, L"VideoMaxWidth", &Config->VideoMaxWidth, NULL);
-	Config__GetInt(FileName, L"VideoMaxHeight", &Config->VideoMaxHeight, NULL);
+	Config__GetStr(FileName, L"VideoCodec",        &Config->VideoCodec,        gVideoCodecs);
+	Config__GetStr(FileName, L"VideoProfile",      &Config->VideoProfile,      gVideoProfiles);
+	Config__GetInt(FileName, L"VideoMaxWidth",     &Config->VideoMaxWidth,     NULL);
+	Config__GetInt(FileName, L"VideoMaxHeight",    &Config->VideoMaxHeight,    NULL);
 	Config__GetInt(FileName, L"VideoMaxFramerate", &Config->VideoMaxFramerate, NULL);
-	Config__GetInt(FileName, L"VideoBitrate", &Config->VideoBitrate, NULL);
+	Config__GetInt(FileName, L"VideoBitrate",      &Config->VideoBitrate,      NULL);
 	// audio
-	Config__GetStr(FileName, L"AudioCodec", &Config->AudioCodec, gAudioCodecs);
-	Config__GetInt(FileName, L"AudioChannels", &Config->AudioChannels, (DWORD[]) { 1, 2, 0 });
+	Config__GetStr(FileName, L"AudioCodec",      &Config->AudioCodec,      gAudioCodecs);
+	Config__GetInt(FileName, L"AudioChannels",   &Config->AudioChannels,   (DWORD[]) { 1, 2, 0 });
 	Config__GetInt(FileName, L"AudioSamplerate", &Config->AudioSamplerate, gAudioSamplerates);
-	Config__GetInt(FileName, L"AudioBitrate", &Config->AudioBitrate, gAudioBitrates);
+	Config__GetInt(FileName, L"AudioBitrate",    &Config->AudioBitrate,    gAudioBitrates);
+	// shortcuts
+	Config__GetInt(FileName, L"ShortcutMonitor", &Config->ShortcutMonitor, NULL);
+	Config__GetInt(FileName, L"ShortcutWindow",  &Config->ShortcutWindow,  NULL);
+	Config__GetInt(FileName, L"ShortcutRect",    &Config->ShortcutRect,    NULL);
 }
 
 static Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
@@ -672,9 +823,13 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 	Config__WriteInt(FileName, L"AudioChannels",   Config->AudioChannels);
 	Config__WriteInt(FileName, L"AudioSamplerate", Config->AudioSamplerate);
 	Config__WriteInt(FileName, L"AudioBitrate",    Config->AudioBitrate);
+	// shortcuts
+	Config__WriteInt(FileName, L"ShortcutMonitor", Config->ShortcutMonitor);
+	Config__WriteInt(FileName, L"ShortcutWindow",  Config->ShortcutWindow);
+	Config__WriteInt(FileName, L"ShortcutRect",    Config->ShortcutRect);
 }
 
-BOOL Config_ShowDialog(Config* Config, HWND Window)
+BOOL Config_ShowDialog(Config* Config)
 {
 	if (gDialogWindow)
 	{
@@ -741,6 +896,17 @@ BOOL Config_ShowDialog(Config* Config, HWND Window)
 					{ NULL },
 				},
 			},
+			{
+				.Caption = "Shor&tcuts",
+				.Rect = { 0, ROW0H + PADDING + ROW1H, COL00W + PADDING + COL01W, ROW2H },
+				.Items = (Config__DialogItem[])
+				{
+					{ "Capture Monitor",   ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 60 },
+					{ "Capture Window",    ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 60 },
+					{ "Capture Rectangle", ID_SHORTCUT_RECT,    ITEM_HOTKEY, 60 },
+					{ NULL },
+				},
+			},
 			{ NULL },
 		},
 	};
@@ -748,5 +914,5 @@ BOOL Config_ShowDialog(Config* Config, HWND Window)
 	BYTE __declspec(align(4)) Data[4096];
 	Config__DoDialogLayout(&Dialog, Data, sizeof(Data));
 
-	return (BOOL)DialogBoxIndirectParamW(GetModuleHandleW(NULL), (LPCDLGTEMPLATEW)Data, Window, Config__DialogProc, (LPARAM)Config);
+	return (BOOL)DialogBoxIndirectParamW(GetModuleHandleW(NULL), (LPCDLGTEMPLATEW)Data, NULL, Config__DialogProc, (LPARAM)Config);
 }

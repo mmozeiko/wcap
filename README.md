@@ -82,6 +82,9 @@ Future plans
 Changelog
 =========
 
+##### 2021.10.17
+ * allow to configure keyboad shortcuts
+
 ##### 2021.10.04
  * option to encode video with HEVC codec
  * option to encode audio with FLAC codec

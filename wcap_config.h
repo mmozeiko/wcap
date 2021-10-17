@@ -39,9 +39,17 @@ typedef struct Config {
 	DWORD AudioChannels;
 	DWORD AudioSamplerate;
 	DWORD AudioBitrate;
+	// shortcuts
+	DWORD ShortcutMonitor;
+	DWORD ShortcutWindow;
+	DWORD ShortcutRect;
 } Config;
+
+#define HOT_KEY(Key, Mod) ((Key) | ((Mod) << 24))
+#define HOT_GET_KEY(KeyMod) ((KeyMod) & 0xffffff)
+#define HOT_GET_MOD(KeyMod) (((KeyMod) >> 24) & 0xff)
 
 void Config_Defaults(Config* Config);
 void Config_Load(Config* Config, LPCWSTR FileName);
 void Config_Save(Config* Config, LPCWSTR FileName);
-BOOL Config_ShowDialog(Config* Config, HWND Window);
+BOOL Config_ShowDialog(Config* Config);
