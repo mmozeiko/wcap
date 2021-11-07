@@ -6,7 +6,7 @@ where /Q cl.exe || (
   call "%VS2019INSTALLDIR%\VC\Auxiliary\Build\vcvarsall.bat" amd64 || exit /b 1
 )
 
-if "%Platform%" neq "x64" (
+if "%Platform%" neq "x64" if "%VSCMD_ARG_TGT_ARCH%" neq "x64" (
   echo ERROR: please run this from MSVC x64 native tools command prompt, 32-bit target is not supported!
   exit /b 1
 )
