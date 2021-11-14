@@ -85,7 +85,9 @@ static WCHAR gRecordingPath[MAX_PATH];
 // when selecting rectangle to record
 static HMONITOR gRectMonitor;
 static HDC gRectContext;
+static HDC gRectDarkContext;
 static HBITMAP gRectBitmap;
+static HBITMAP gRectDarkBitmap;
 static DWORD gRectWidth;
 static DWORD gRectHeight;
 static BOOL gRectSelected;
@@ -464,6 +466,8 @@ static void CaptureRectangleInit(void)
 	DWORD Width = Info.rcMonitor.right - Info.rcMonitor.left;
 	DWORD Height = Info.rcMonitor.bottom - Info.rcMonitor.top;
 
+	// capture image from desktop
+
 	HDC MemoryContext = CreateCompatibleDC(DeviceContext);
 	Assert(MemoryContext);
 
@@ -473,11 +477,32 @@ static void CaptureRectangleInit(void)
 	SelectObject(MemoryContext, MemoryBitmap);
 	BitBlt(MemoryContext, 0, 0, Width, Height, DeviceContext, 0, 0, SRCCOPY);
 
+	// prepare darkened image by doing alpha blend
+
+	HDC MemoryDarkContext = CreateCompatibleDC(DeviceContext);
+	Assert(MemoryDarkContext);
+
+	HBITMAP MemoryDarkBitmap = CreateCompatibleBitmap(DeviceContext, Width, Height);
+	Assert(MemoryDarkBitmap);
+
+	BLENDFUNCTION Blend =
+	{
+		.BlendOp = AC_SRC_OVER,
+		.SourceConstantAlpha = 0x40,
+	};
+
+	SelectObject(MemoryDarkContext, MemoryDarkBitmap);
+	AlphaBlend(MemoryDarkContext, 0, 0, Width, Height, MemoryContext, 0, 0, Width, Height, Blend);
+
+	// done
+
 	DeleteDC(DeviceContext);
 
 	gRectMonitor = Monitor;
 	gRectContext = MemoryContext;
+	gRectDarkContext = MemoryDarkContext;
 	gRectBitmap = MemoryBitmap;
+	gRectDarkBitmap = MemoryDarkBitmap;
 	gRectWidth = Width;
 	gRectHeight = Height;
 	gRectSelected = FALSE;
@@ -502,6 +527,12 @@ static void CaptureRectangleDone(void)
 
 		DeleteObject(gRectBitmap);
 		gRectBitmap = NULL;
+
+		DeleteDC(gRectDarkContext);
+		gRectDarkContext = NULL;
+
+		DeleteObject(gRectDarkBitmap);
+		gRectDarkBitmap = NULL;
 	}
 }
 
@@ -978,29 +1009,8 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 				int W = Paint.rcPaint.right - Paint.rcPaint.left;
 				int H = Paint.rcPaint.bottom - Paint.rcPaint.top;
 
-				// clear
-				FillRect(Context, &Paint.rcPaint, GetStockObject(BLACK_BRUSH));
-
 				// draw darkened screenshot
-				{
-					HDC TempContext = CreateCompatibleDC(Context);
-					Assert(TempContext);
-					HBITMAP TempBitmap = CreateCompatibleBitmap(Context, W, H);
-					Assert(TempBitmap);
-					SelectObject(TempContext, TempBitmap);
-
-					BitBlt(TempContext, 0, 0, W, H, gRectContext, X, Y, SRCCOPY);
-
-					BLENDFUNCTION Blend =
-					{
-						.BlendOp = AC_SRC_OVER,
-						.SourceConstantAlpha = 0x40,
-					};
-					AlphaBlend(Context, X, Y, W, H, TempContext, 0, 0, W, H, Blend);
-
-					DeleteObject(TempBitmap);
-					DeleteDC(TempContext);
-				}
+				BitBlt(Context, X, Y, W, H, gRectDarkContext, X, Y, SRCCOPY);
 
 				if (gRectSelected)
 				{
