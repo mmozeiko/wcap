@@ -345,6 +345,14 @@ static void CaptureWindow(void)
 		return;
 	}
 
+	// figure out who is owner of child window if somehow child window is selected (happens for fancy winamp skins)
+	HWND Parent = GetParent(Window);
+	while (Parent != NULL)
+	{
+		Window = Parent;
+		Parent = GetParent(Window);
+	}
+
 	DWORD Affinity;
 	BOOL Success = GetWindowDisplayAffinity(Window, &Affinity);
 	Assert(Success);
@@ -358,7 +366,7 @@ static void CaptureWindow(void)
 	LONG ExStyle = GetWindowLongW(Window, GWL_EXSTYLE);
 	if (ExStyle & WS_EX_TOOLWINDOW)
 	{
-		ShowNotification(L"Cannot capture toolbar windows!", L"Cannot Start Recording", NIIF_WARNING);
+		ShowNotification(L"Cannot capture toolbar window!", L"Cannot Start Recording", NIIF_WARNING);
 		return;
 	}
 
