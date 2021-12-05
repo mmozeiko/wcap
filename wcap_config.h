@@ -12,6 +12,9 @@
 #define CONFIG_AUDIO_AAC  0
 #define CONFIG_AUDIO_FLAC 1
 
+#define CONFIG_VIDEO_LIMITED 0
+#define CONFIG_VIDEO_FULL    1
+
 typedef struct Config {
 	// capture
 	BOOL ShowNotifications;
@@ -30,6 +33,7 @@ typedef struct Config {
 	// video
 	DWORD VideoCodec;
 	DWORD VideoProfile;
+	DWORD VideoColorRange;
 	DWORD VideoMaxWidth;
 	DWORD VideoMaxHeight;
 	DWORD VideoMaxFramerate;

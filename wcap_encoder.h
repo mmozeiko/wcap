@@ -29,6 +29,8 @@ typedef struct Encoder {
 	ID3D11ComputeShader* ResizeShader;
 	ID3D11ComputeShader* ConvertShader;
 
+	ID3D11Buffer* ConvertBuffer;
+
 	// RGB input texture
 	ID3D11Texture2D* InputTexture;
 	ID3D11RenderTargetView* InputRenderTarget;

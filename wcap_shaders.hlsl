@@ -8,6 +8,16 @@ RWTexture2D<unorm float4> Output : register(u1);
 RWTexture2D<uint>  OutputY  : register(u1);
 RWTexture2D<uint2> OutputUV : register(u2);
 
+// for conversion
+cbuffer ConstantBuffer : register(b0)
+{
+	float4 ConvertY;
+	float4 ConvertU;
+	float4 ConvertV;
+	float4 RangeY;
+	float4 RangeUV;
+}
+
 float Filter(float x)
 {
 	// https://en.wikipedia.org/wiki/Mitchell%E2%80%93Netravali_filters
@@ -70,12 +80,6 @@ void Resize(uint3 Id: SV_DispatchThreadID)
 	Output[Id.xy] = Color;
 }
 
-// BT.709, full 0..255 range
-// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-static const float3 ConvertY = {  0.2126,  0.7152,  0.0722 };
-static const float3 ConvertU = { -0.1146, -0.3854,  0.5    };
-static const float3 ConvertV = {  0.5,    -0.4542, -0.0458 };
-
 float Average(float4 Color)
 {
 	return floor(dot(Color, 1) * 0.25 + 0.5);
@@ -105,13 +109,16 @@ void Convert(uint3 Id: SV_DispatchThreadID)
 
 	float3 Avg = float3(Average(R), Average(G), Average(B));
 
-	uint4 Y = uint4(clamp(ConvertY.x * R + ConvertY.y * G + ConvertY.z * B, 0, 255));
+	float4 Yf = ConvertY.x * R + ConvertY.y * G + ConvertY.z * B + ConvertY.w;
+	uint4 Y = uint4(clamp(Yf, RangeY.x, RangeY.y));
 	OutputY[Pos4.xy] = Y.x;
 	OutputY[Pos4.zy] = Y.y;
 	OutputY[Pos4.xw] = Y.z;
 	OutputY[Pos4.zw] = Y.w;
 
-	uint U = uint(clamp(dot(ConvertU, Avg) + 128.5, 0, 255));
-	uint V = uint(clamp(dot(ConvertV, Avg) + 128.5, 0, 255));
+	float Uf = dot(ConvertU.xyz, Avg) + 128.5;
+	float Vf = dot(ConvertV.xyz, Avg) + 128.5;
+	uint U = uint(clamp(Uf, RangeUV.x, RangeUV.y));
+	uint V = uint(clamp(Vf, RangeUV.x, RangeUV.y));
 	OutputUV[Pos] = uint2(U, V);
 }
