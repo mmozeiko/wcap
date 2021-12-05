@@ -26,10 +26,24 @@ typedef struct Encoder {
 	int VideoStreamIndex;
 	int AudioStreamIndex;
 
-	ID3D11Texture2D*        Texture;
-	ID3D11RenderTargetView* TextureView[ENCODER_VIDEO_BUFFER_COUNT];
-	IMFSample*              VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
-	IMFTrackedSample*       VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11ComputeShader* ResizeShader;
+	ID3D11ComputeShader* ConvertShader;
+
+	// RGB input texture
+	ID3D11Texture2D* InputTexture;
+	ID3D11RenderTargetView* InputRenderTarget;
+	ID3D11UnorderedAccessView* InputTextureView;
+
+	// RGB resized texture
+	ID3D11Texture2D* ResizedTexture;
+	ID3D11UnorderedAccessView* ResizedTextureView;
+
+	// NV12 converted texture
+	ID3D11Texture2D*           ConvertedTexture[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11UnorderedAccessView* ConvertedTextureViewY[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11UnorderedAccessView* ConvertedTextureViewUV[ENCODER_VIDEO_BUFFER_COUNT];
+	IMFSample*                 VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
+	IMFTrackedSample*          VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
 
 	DWORD         VideoIndex; // next index to use
 	volatile LONG VideoCount; // how many samples are currently available to use

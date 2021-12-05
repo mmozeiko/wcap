@@ -6,6 +6,9 @@
 #include <codecapi.h>
 #include <wmcodecdsp.h>
 
+#include "wcap_resize_shader.h"
+#include "wcap_convert_shader.h"
+
 #define MFT64(high, low) (((UINT64)high << 32) | (low))
 
 static HRESULT STDMETHODCALLTYPE Encoder__QueryInterface(IMFAsyncCallback* this, REFIID riid, void** Object)
@@ -146,6 +149,9 @@ void Encoder_Init(Encoder* Encoder, ID3D11Device* Device, ID3D11DeviceContext* C
 	Encoder->Device = Device;
 	Encoder->VideoSampleCallback.lpVtbl = &Encoder__VideoSampleCallbackVtbl;
 	Encoder->AudioSampleCallback.lpVtbl = &Encoder__AudioSampleCallbackVtbl;
+
+	HR(ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes,  sizeof(ResizeShaderBytes),  NULL, &Encoder->ResizeShader));
+	HR(ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &Encoder->ConvertShader));
 }
 
 BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Config)
@@ -224,7 +230,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 	BOOL Result = FALSE;
 	IMFSinkWriter* Writer = NULL;
-	ID3D11Texture2D* Texture = NULL;
 	IMFTransform* Resampler = NULL;
 	HRESULT hr;
 
@@ -274,11 +279,10 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, Codec));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_MPEG2_PROFILE, Profile));
-		// TODO: these don't really work with builtin Video Processor MFT, probably will to convert manually...
-		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
-		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
-		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		//HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_0_255));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_0_255));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -294,14 +298,18 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		}
 	}
 
-	// video input type, 32-bit RGB - sink writer will automatically do conversion to YUV for H264 codec
+	// video input type, NV12 format
 	{
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
-		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFVideoFormat_RGB32));
+		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFVideoFormat_NV12));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_0_255));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
-		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(InputWidth, InputHeight)));
+		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
 
 		hr = IMFSinkWriter_SetInputMediaType(Writer, Encoder->VideoStreamIndex, Type, NULL);
 		IMFMediaType_Release(Type);
@@ -431,53 +439,99 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 	// video texture/buffers/samples
 	{
-		// create texture array - as many as there are buffers
-		D3D11_TEXTURE2D_DESC TextureDesc =
+		// RGB input texture
 		{
-			.Width = InputWidth,
-			.Height = InputHeight,
-			.MipLevels = 1,
-			.ArraySize = ENCODER_VIDEO_BUFFER_COUNT,
-			.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
-			.SampleDesc = { 1, 0 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_RENDER_TARGET,
-		};
-		hr = ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Texture);
-		if (FAILED(hr))
-		{
-			MessageBoxW(NULL, L"Cannot allocate GPU resources!", WCAP_TITLE, MB_ICONERROR);
-			goto bail;
+			D3D11_TEXTURE2D_DESC TextureDesc =
+			{
+				.Width = InputWidth,
+				.Height = InputHeight,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+				.SampleDesc = { 1, 0 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS,
+			};
+			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->InputTexture));
+			HR(ID3D11Device_CreateRenderTargetView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
+			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputTextureView));
 		}
 
-		UINT32 Size;
-		HR(MFCalculateImageSize(&MFVideoFormat_RGB32, InputWidth, InputHeight, &Size));
-
-		// create samples each referencing individual element of texture array
-		for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
+		// RGB resized texture
+		if (InputWidth == OutputWidth && InputHeight == OutputHeight)
 		{
-			D3D11_RENDER_TARGET_VIEW_DESC ViewDesc =
+			// no resizing needed, just create UAV view
+			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizedTextureView));
+			Encoder->ResizedTexture = NULL;
+		}
+		else
+		{
+			D3D11_TEXTURE2D_DESC TextureDesc =
 			{
-				.Format = TextureDesc.Format,
-				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY,
-				.Texture2DArray.FirstArraySlice = i,
-				.Texture2DArray.ArraySize = 1,
+				.Width = OutputWidth,
+				.Height = OutputHeight,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+				.SampleDesc = { 1, 0 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
+			};
+			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->ResizedTexture));
+			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, NULL, &Encoder->ResizedTextureView));
+		}
+
+		// NV12 converted texture
+		{
+			UINT32 Size;
+			HR(MFCalculateImageSize(&MFVideoFormat_NV12, OutputWidth, OutputHeight, &Size));
+
+			D3D11_TEXTURE2D_DESC TextureDesc =
+			{
+				.Width = OutputWidth,
+				.Height = OutputHeight,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_NV12,
+				.SampleDesc = { 1, 0 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
 			};
 
-			IMFSample* VideoSample;
-			IMFMediaBuffer* Buffer;
-			IMFTrackedSample* VideoTracked;
+			D3D11_UNORDERED_ACCESS_VIEW_DESC ViewY =
+			{
+				.Format = DXGI_FORMAT_R8_UINT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			};
 
-			HR(MFCreateVideoSampleFromSurface(NULL, &VideoSample));
-			HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, i, FALSE, &Buffer));
-			HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
-			HR(IMFSample_AddBuffer(VideoSample, Buffer));
-			HR(IMFSample_QueryInterface(VideoSample, &IID_IMFTrackedSample, (LPVOID*)&VideoTracked));
-			HR(ID3D11Device_CreateRenderTargetView(Encoder->Device, (ID3D11Resource*)Texture, &ViewDesc, &Encoder->TextureView[i]));
-			IMFMediaBuffer_Release(Buffer);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC ViewUV =
+			{
+				.Format = DXGI_FORMAT_R8G8_UINT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			};
 
-			Encoder->VideoSample[i] = VideoSample;
-			Encoder->VideoTracked[i] = VideoTracked;
+			// create samples each referencing individual element of texture array
+			for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
+			{
+				IMFSample* VideoSample;
+				IMFMediaBuffer* Buffer;
+				IMFTrackedSample* VideoTracked;
+
+				ID3D11Texture2D* Texture;
+				HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Texture));
+				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertedTextureViewY[i]));
+				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertedTextureViewUV[i]));
+				HR(MFCreateVideoSampleFromSurface(NULL, &VideoSample));
+				HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, 0, FALSE, &Buffer));
+				HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
+				HR(IMFSample_AddBuffer(VideoSample, Buffer));
+				HR(IMFSample_QueryInterface(VideoSample, &IID_IMFTrackedSample, (LPVOID*)&VideoTracked));
+				IMFMediaBuffer_Release(Buffer);
+
+				Encoder->ConvertedTexture[i] = Texture;
+				Encoder->VideoSample[i] = VideoSample;
+				Encoder->VideoTracked[i] = VideoTracked;
+			}
 		}
 
 		Encoder->InputWidth = InputWidth;
@@ -486,7 +540,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		Encoder->OutputHeight = OutputHeight;
 		Encoder->FramerateNum = Config->FramerateNum;
 		Encoder->FramerateDen = Config->FramerateDen;
-		Encoder->Texture = Texture;
 		Encoder->VideoIndex = 0;
 		Encoder->VideoCount = ENCODER_VIDEO_BUFFER_COUNT;
 	}
@@ -535,7 +588,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 	Encoder->StartTime = 0;
 	Encoder->Writer = Writer;
 	Writer = NULL;
-	Texture = NULL;
 	Resampler = NULL;
 	Result = TRUE;
 
@@ -543,10 +595,6 @@ bail:
 	if (Resampler)
 	{
 		IMFTransform_Release(Resampler);
-	}
-	if (Texture)
-	{
-		ID3D11Texture2D_Release(Texture);
 	}
 	if (Writer)
 	{
@@ -583,11 +631,23 @@ void Encoder_Stop(Encoder* Encoder)
 
 	for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
 	{
-		ID3D11RenderTargetView_Release(Encoder->TextureView[i]);
+		ID3D11UnorderedAccessView_Release(Encoder->ConvertedTextureViewY[i]);
+		ID3D11UnorderedAccessView_Release(Encoder->ConvertedTextureViewUV[i]);
+		ID3D11Texture2D_Release(Encoder->ConvertedTexture[i]);
 		IMFSample_Release(Encoder->VideoSample[i]);
 		IMFTrackedSample_Release(Encoder->VideoTracked[i]);
 	}
-	ID3D11Texture2D_Release(Encoder->Texture);
+
+	ID3D11UnorderedAccessView_Release(Encoder->ResizedTextureView);
+	if (Encoder->ResizedTexture)
+	{
+		ID3D11Texture2D_Release(Encoder->ResizedTexture);
+		Encoder->ResizedTexture = NULL;
+	}
+
+	ID3D11UnorderedAccessView_Release(Encoder->InputTextureView);
+	ID3D11RenderTargetView_Release(Encoder->InputRenderTarget);
+	ID3D11Texture2D_Release(Encoder->InputTexture);
 
 	ID3D11DeviceContext_Flush(Encoder->Context);
 }
@@ -622,12 +682,31 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		if (Width < Encoder->InputWidth || Height < Encoder->InputHeight)
 		{
 			FLOAT Black[] = { 0, 0, 0, 0 };
-			ID3D11DeviceContext_ClearRenderTargetView(Encoder->Context, Encoder->TextureView[Index], Black);
+			ID3D11DeviceContext_ClearRenderTargetView(Encoder->Context, Encoder->InputRenderTarget, Black);
 
 			Box.right = Box.left + min(Encoder->InputWidth, Box.right);
 			Box.bottom = Box.top + min(Encoder->InputHeight, Box.bottom);
 		}
-		ID3D11DeviceContext_CopySubresourceRegion(Encoder->Context, (ID3D11Resource*)Encoder->Texture, Index, 0, 0, 0, (ID3D11Resource*)Texture, 0, &Box);
+		ID3D11DeviceContext_CopySubresourceRegion(Encoder->Context, (ID3D11Resource*)Encoder->InputTexture, 0, 0, 0, 0, (ID3D11Resource*)Texture, 0, &Box);
+	}
+
+	// resize if needed
+	if (Encoder->ResizedTexture != NULL)
+	{
+		ID3D11UnorderedAccessView* Views[] = { Encoder->InputTextureView, Encoder->ResizedTextureView };
+
+		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ResizeShader, NULL, 0);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
+		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 15) / 16, 1);
+	}
+
+	// convert to YUV
+	{
+		ID3D11UnorderedAccessView* Views[] = { Encoder->ResizedTextureView, Encoder->ConvertedTextureViewY[Index], Encoder->ConvertedTextureViewUV[Index] };
+
+		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ConvertShader, NULL, 0);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
+		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 15) / 16, 1);
 	}
 
 	// setup input time & duration

@@ -82,6 +82,11 @@ Future plans
 Changelog
 =========
 
+##### 2021.12.04
+ * improved resizing and YUV conversion quality
+ * improved performance for drawing background for rectangle selection
+ * fix crash when child window is in foreground for window capture
+
 ##### 2021.10.17
  * allow to configure keyboad shortcuts
 
