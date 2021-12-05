@@ -83,6 +83,9 @@ Changelog
 =========
 
 ##### 2021.12.04
+ * allow to selected limited vs full range for YUV conversion
+
+##### 2021.12.04
  * improved resizing and YUV conversion quality
  * improved performance for drawing background for rectangle selection
  * fix crash when child window is in foreground for window capture
