@@ -82,7 +82,10 @@ Future plans
 Changelog
 =========
 
-##### 2021.12.04
+##### 2021.12.08
+ * fixed compute shaders to work on older D3D11 hardware
+
+##### 2021.12.05
  * allow to selected limited vs full range for YUV conversion
 
 ##### 2021.12.04
