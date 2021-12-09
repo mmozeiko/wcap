@@ -462,18 +462,19 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
 				.SampleDesc = { 1, 0 },
 				.Usage = D3D11_USAGE_DEFAULT,
-				.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS,
+				.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
 			};
 			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->InputTexture));
 			HR(ID3D11Device_CreateRenderTargetView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
-			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputTextureView));
+			HR(ID3D11Device_CreateShaderResourceView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView));
 		}
 
 		// RGB resized texture
 		if (InputWidth == OutputWidth && InputHeight == OutputHeight)
 		{
-			// no resizing needed, just create UAV view
-			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizedTextureView));
+			// no resizing needed, use input texture as input to converter shader directly
+			ID3D11ShaderResourceView_AddRef(Encoder->ResizeInputView);
+			Encoder->ConvertInputView = Encoder->ResizeInputView;
 			Encoder->ResizedTexture = NULL;
 		}
 		else
@@ -484,13 +485,30 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.Height = OutputHeight,
 				.MipLevels = 1,
 				.ArraySize = 1,
-				.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+				.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS,
 				.SampleDesc = { 1, 0 },
 				.Usage = D3D11_USAGE_DEFAULT,
-				.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
+				.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE,
 			};
 			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->ResizedTexture));
-			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, NULL, &Encoder->ResizedTextureView));
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC ResourceView =
+			{
+				.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D.MipLevels = 1,
+				.Texture2D.MostDetailedMip = 0,
+			};
+			HR(ID3D11Device_CreateShaderResourceView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, &ResourceView, &Encoder->ConvertInputView));
+
+			// because D3D 11.0 does not support B8G8R8A8_UNORM for UAV, create uint UAV used on BGRA texture
+			D3D11_UNORDERED_ACCESS_VIEW_DESC AccessViewDesc =
+			{
+				.Format = DXGI_FORMAT_R32_UINT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D.MipSlice = 0,
+			};
+			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView));
 		}
 
 		// NV12 converted texture
@@ -531,8 +549,8 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 				ID3D11Texture2D* Texture;
 				HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Texture));
-				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertedTextureViewY[i]));
-				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertedTextureViewUV[i]));
+				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertOutputViewY[i]));
+				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertOutputViewUV[i]));
 				HR(MFCreateVideoSampleFromSurface(NULL, &VideoSample));
 				HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, 0, FALSE, &Buffer));
 				HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
@@ -540,7 +558,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				HR(IMFSample_QueryInterface(VideoSample, &IID_IMFTrackedSample, (LPVOID*)&VideoTracked));
 				IMFMediaBuffer_Release(Buffer);
 
-				Encoder->ConvertedTexture[i] = Texture;
+				Encoder->ConvertTexture[i] = Texture;
 				Encoder->VideoSample[i] = VideoSample;
 				Encoder->VideoTracked[i] = VideoTracked;
 			}
@@ -678,22 +696,23 @@ void Encoder_Stop(Encoder* Encoder)
 
 	for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
 	{
-		ID3D11UnorderedAccessView_Release(Encoder->ConvertedTextureViewY[i]);
-		ID3D11UnorderedAccessView_Release(Encoder->ConvertedTextureViewUV[i]);
-		ID3D11Texture2D_Release(Encoder->ConvertedTexture[i]);
+		ID3D11UnorderedAccessView_Release(Encoder->ConvertOutputViewY[i]);
+		ID3D11UnorderedAccessView_Release(Encoder->ConvertOutputViewUV[i]);
+		ID3D11Texture2D_Release(Encoder->ConvertTexture[i]);
 		IMFSample_Release(Encoder->VideoSample[i]);
 		IMFTrackedSample_Release(Encoder->VideoTracked[i]);
 	}
 
-	ID3D11UnorderedAccessView_Release(Encoder->ResizedTextureView);
+    ID3D11ShaderResourceView_Release(Encoder->ConvertInputView);
 	if (Encoder->ResizedTexture)
 	{
+		ID3D11UnorderedAccessView_Release(Encoder->ResizeOutputView);
 		ID3D11Texture2D_Release(Encoder->ResizedTexture);
 		Encoder->ResizedTexture = NULL;
 	}
 
-	ID3D11UnorderedAccessView_Release(Encoder->InputTextureView);
 	ID3D11RenderTargetView_Release(Encoder->InputRenderTarget);
+	ID3D11ShaderResourceView_Release(Encoder->ResizeInputView);
 	ID3D11Texture2D_Release(Encoder->InputTexture);
 
 	ID3D11DeviceContext_Flush(Encoder->Context);
@@ -740,19 +759,25 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	// resize if needed
 	if (Encoder->ResizedTexture != NULL)
 	{
-		ID3D11UnorderedAccessView* Views[] = { Encoder->InputTextureView, Encoder->ResizedTextureView };
-
 		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ResizeShader, NULL, 0);
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
+
+		// must bind input first, because otherwise ConvertInputView on input will reference same texture as ResizeOutputView on output rfrom previous frame
+		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ResizeInputView);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, 1, &Encoder->ResizeOutputView, NULL);
+
 		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 15) / 16, 1);
 	}
 
 	// convert to YUV
 	{
-		ID3D11UnorderedAccessView* Views[] = { Encoder->ResizedTextureView, Encoder->ConvertedTextureViewY[Index], Encoder->ConvertedTextureViewUV[Index] };
+		ID3D11UnorderedAccessView* Views[] = { Encoder->ConvertOutputViewY[Index], Encoder->ConvertOutputViewUV[Index] };
 
 		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ConvertShader, NULL, 0);
+
+		// must bind output first, because otherwise ConvertInputView on input will reference same texture as ResizeOutputView on output from resize shader above
 		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
+		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ConvertInputView);
+
 		ID3D11DeviceContext_CSSetConstantBuffers(Encoder->Context, 0, 1, &Encoder->ConvertBuffer);
 		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 15) / 16, 1);
 	}

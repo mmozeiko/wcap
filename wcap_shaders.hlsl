@@ -1,12 +1,12 @@
 // resize & convert input
-RWTexture2D<unorm float4> Input : register(u0);
+Texture2D<float4> Input : register(t0);
 
-// resize output
-RWTexture2D<unorm float4> Output : register(u1);
+// resize output, packed BGRA format
+RWTexture2D<uint> Output : register(u0);
 
 // convert output
-RWTexture2D<uint>  OutputY  : register(u1);
-RWTexture2D<uint2> OutputUV : register(u2);
+RWTexture2D<uint>  OutputY  : register(u0);
+RWTexture2D<uint2> OutputUV : register(u1);
 
 // for conversion
 cbuffer ConstantBuffer : register(b0)
@@ -77,7 +77,8 @@ void Resize(uint3 Id: SV_DispatchThreadID)
 		Color /= Weight;
 	}
 
-	Output[Id.xy] = Color;
+	// packs float3 Color to uint BGRA output
+	Output[Id.xy] = dot(uint3(floor(clamp(Color.bgr, 0, 1) * 255 + 0.5)), uint3(1, 1 << 8, 1 << 16));
 }
 
 float Average(float4 Color)

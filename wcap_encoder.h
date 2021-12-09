@@ -34,16 +34,17 @@ typedef struct Encoder {
 	// RGB input texture
 	ID3D11Texture2D* InputTexture;
 	ID3D11RenderTargetView* InputRenderTarget;
-	ID3D11UnorderedAccessView* InputTextureView;
+	ID3D11ShaderResourceView* ResizeInputView;
 
 	// RGB resized texture
 	ID3D11Texture2D* ResizedTexture;
-	ID3D11UnorderedAccessView* ResizedTextureView;
+    ID3D11ShaderResourceView* ConvertInputView;
+	ID3D11UnorderedAccessView* ResizeOutputView;
 
 	// NV12 converted texture
-	ID3D11Texture2D*           ConvertedTexture[ENCODER_VIDEO_BUFFER_COUNT];
-	ID3D11UnorderedAccessView* ConvertedTextureViewY[ENCODER_VIDEO_BUFFER_COUNT];
-	ID3D11UnorderedAccessView* ConvertedTextureViewUV[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11Texture2D*           ConvertTexture[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11UnorderedAccessView* ConvertOutputViewY[ENCODER_VIDEO_BUFFER_COUNT];
+	ID3D11UnorderedAccessView* ConvertOutputViewUV[ENCODER_VIDEO_BUFFER_COUNT];
 	IMFSample*                 VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
 	IMFTrackedSample*          VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
 
