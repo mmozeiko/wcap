@@ -152,14 +152,6 @@ void Encoder_Init(Encoder* Encoder, ID3D11Device* Device, ID3D11DeviceContext* C
 
 	HR(ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes,  sizeof(ResizeShaderBytes),  NULL, &Encoder->ResizeShader));
 	HR(ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &Encoder->ConvertShader));
-
-	D3D11_BUFFER_DESC BufferDesc =
-	{
-		.ByteWidth = 16*5,
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
-	};
-	HR(ID3D11Device_CreateBuffer(Device, &BufferDesc, NULL, &Encoder->ConvertBuffer));
 }
 
 BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Config)
@@ -281,8 +273,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 			Profile = eAVEncH265VProfile_Main_420_8;
 		}
 
-		MFNominalRange Range = Config->Config->VideoColorRange == CONFIG_VIDEO_LIMITED ? MFNominalRange_16_235 : MFNominalRange_0_255;
-
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 
@@ -292,7 +282,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, Range));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -310,8 +300,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 
 	// video input type, NV12 format
 	{
-		MFNominalRange Range = Config->Config->VideoColorRange == CONFIG_VIDEO_LIMITED ? MFNominalRange_16_235 : MFNominalRange_0_255;
-
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
@@ -319,7 +307,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, Range));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
 
@@ -619,41 +607,6 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		Encoder->AudioIndex = 0;
 	}
 
-	// setup color conversion constants
-	{
-		float Data[5][4] =
-		{
-			// data for BT.709, full [0..255] range: https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-			{  0.2126f,  0.7152f,  0.0722f },
-			{ -0.1146f, -0.3854f,  0.5f    },
-			{  0.5f,    -0.4542f, -0.0458f },
-
-			{ 0.f, 255.f }, // Y range
-			{ 0.f, 255.f }, // UV range
-		};
-
-		if (Config->Config->VideoColorRange == CONFIG_VIDEO_LIMITED)
-		{
-			// limited range means Y=[16..235], UV=[16..240]
-			for (int i = 0; i < 3; i++)
-			{
-				Data[0][i] *= 219.f / 255.f;
-				Data[1][i] *= 224.f / 255.f;
-				Data[2][i] *= 224.f / 255.f;
-			}
-			Data[0][3] = 16.f;
-
-			// Y range
-			Data[3][0] = 16.f;
-			Data[3][1] = 235.f;
-			// UV range
-			Data[3][0] = Data[4][0] = 16.f;
-			Data[3][1] = Data[4][1] = 240.f;
-		}
-
-		ID3D11DeviceContext_UpdateSubresource(Encoder->Context, (ID3D11Resource*)Encoder->ConvertBuffer, 0, NULL, Data, sizeof(Data), 0);
-	}
-
 	Encoder->StartTime = 0;
 	Encoder->Writer = Writer;
 	Writer = NULL;
@@ -786,7 +739,6 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
 		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ConvertInputView);
 
-		ID3D11DeviceContext_CSSetConstantBuffers(Encoder->Context, 0, 1, &Encoder->ConvertBuffer);
 		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 15) / 16, 1);
 	}
 

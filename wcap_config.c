@@ -23,7 +23,6 @@
 #define ID_LIMIT_SIZE          100
 #define ID_VIDEO_CODEC         110
 #define ID_VIDEO_PROFILE       120
-#define ID_VIDEO_COLOR_RANGE   125
 #define ID_VIDEO_MAX_WIDTH     130
 #define ID_VIDEO_MAX_HEIGHT    140
 #define ID_VIDEO_MAX_FRAMERATE 150
@@ -58,7 +57,7 @@
 #define COL10W 144
 #define COL11W 130
 #define ROW0H 86
-#define ROW1H 110
+#define ROW1H 96
 #define ROW2H 56
 
 #define PADDING 4             // padding for dialog and group boxes
@@ -187,7 +186,6 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	{
 		SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_SETCURSEL, 0, 0);
 	}
-	SendDlgItemMessageW(Window, ID_VIDEO_COLOR_RANGE, CB_SETCURSEL, Config->VideoColorRange, 0);
 	SetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     Config->VideoMaxWidth,     FALSE);
 	SetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    Config->VideoMaxHeight,    FALSE);
 	SetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, Config->VideoMaxFramerate, FALSE);
@@ -295,9 +293,6 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"H264 / AVC");
 		SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"H265 / HEVC");
 
-		SendDlgItemMessageW(Window, ID_VIDEO_COLOR_RANGE, CB_ADDSTRING, 0, (LPARAM)L"Limited [16..235]");
-		SendDlgItemMessageW(Window, ID_VIDEO_COLOR_RANGE, CB_ADDSTRING, 0, (LPARAM)L"Full [0..255]");
-
 		SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"AAC");
 		SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_ADDSTRING, 0, (LPARAM)L"FLAC");
 
@@ -344,7 +339,6 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			{
 				Config->VideoProfile = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_PROFILE, CB_GETCURSEL, 0, 0);
 			}
-			Config->VideoColorRange   = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_COLOR_RANGE, CB_GETCURSEL, 0, 0);
 			Config->VideoMaxWidth     = GetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     NULL, FALSE);
 			Config->VideoMaxHeight    = GetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    NULL, FALSE);
 			Config->VideoMaxFramerate = GetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, NULL, FALSE);
@@ -689,7 +683,6 @@ void Config_Defaults(Config* Config)
 		// video
 		.VideoCodec = CONFIG_VIDEO_H264,
 		.VideoProfile = CONFIG_VIDEO_HIGH,
-		.VideoColorRange = CONFIG_VIDEO_LIMITED,
 		.VideoMaxWidth = 1920,
 		.VideoMaxHeight = 1080,
 		.VideoMaxFramerate = 60,
@@ -780,7 +773,6 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 	// video
 	Config__GetStr(FileName, L"VideoCodec",        &Config->VideoCodec,        gVideoCodecs);
 	Config__GetStr(FileName, L"VideoProfile",      &Config->VideoProfile,      gVideoProfiles);
-	Config__GetInt(FileName, L"VideoColorRange",   &Config->VideoColorRange,   NULL);
 	Config__GetInt(FileName, L"VideoMaxWidth",     &Config->VideoMaxWidth,     NULL);
 	Config__GetInt(FileName, L"VideoMaxHeight",    &Config->VideoMaxHeight,    NULL);
 	Config__GetInt(FileName, L"VideoMaxFramerate", &Config->VideoMaxFramerate, NULL);
@@ -822,7 +814,6 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 	// video
 	WritePrivateProfileStringW(INI_SECTION, L"VideoCodec",   gVideoCodecs[Config->VideoCodec],     FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"VideoProfile", gVideoProfiles[Config->VideoProfile], FileName);
-	Config__WriteInt(FileName, L"VideoColorRange",   Config->VideoColorRange);
 	Config__WriteInt(FileName, L"VideoMaxWidth",     Config->VideoMaxWidth);
 	Config__WriteInt(FileName, L"VideoMaxHeight",    Config->VideoMaxHeight);
 	Config__WriteInt(FileName, L"VideoMaxFramerate", Config->VideoMaxFramerate);
@@ -886,7 +877,6 @@ BOOL Config_ShowDialog(Config* Config)
 				{
 					{ "Codec",             ID_VIDEO_CODEC,         ITEM_COMBOBOX, 64 },
 					{ "Profile",           ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 64 },
-					{ "Color Range",       ID_VIDEO_COLOR_RANGE,   ITEM_COMBOBOX, 64 },
 					{ "Max &Width",        ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   64 },
 					{ "Max &Height",       ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   64 },
 					{ "Max &Framerate",    ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   64 },
