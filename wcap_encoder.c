@@ -573,6 +573,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		Encoder->OutputHeight = OutputHeight;
 		Encoder->FramerateNum = Config->FramerateNum;
 		Encoder->FramerateDen = Config->FramerateDen;
+		Encoder->VideoDiscontinuity = FALSE;
 		Encoder->VideoIndex = 0;
 		Encoder->VideoCount = ENCODER_VIDEO_BUFFER_COUNT;
 	}
@@ -725,6 +726,10 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 {
 	if (Encoder->VideoCount == 0)
 	{
+		// dropped frame
+		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
+		HR(IMFSinkWriter_SendStreamTick(Encoder->Writer, Encoder->VideoStreamIndex, Timestamp));
+		Encoder->VideoDiscontinuity = TRUE;
 		return FALSE;
 	}
 	DWORD Index = Encoder->VideoIndex;
@@ -792,6 +797,17 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	}
 	HR(IMFSample_SetSampleDuration(VideoSample, MFllMulDiv(Encoder->FramerateDen, MF_UNITS_PER_SECOND, Encoder->FramerateNum, 0)));
 	HR(IMFSample_SetSampleTime(VideoSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
+
+	if (Encoder->VideoDiscontinuity)
+	{
+		HR(IMFSample_SetUINT32(VideoSample, &MFSampleExtension_Discontinuity, TRUE));
+		Encoder->VideoDiscontinuity = FALSE;
+	}
+	else
+	{
+		// don't care about success or no, we just don't want this attribute set at all
+		IMFSample_DeleteItem(VideoSample, &MFSampleExtension_Discontinuity);
+	}
 
 	// submit to encoder which will happen in background
 	HR(IMFTrackedSample_SetAllocator(VideoTracked, &Encoder->VideoSampleCallback, NULL));

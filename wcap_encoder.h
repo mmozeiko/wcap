@@ -48,6 +48,7 @@ typedef struct Encoder {
 	IMFSample*                 VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
 	IMFTrackedSample*          VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
 
+	BOOL          VideoDiscontinuity;
 	DWORD         VideoIndex; // next index to use
 	volatile LONG VideoCount; // how many samples are currently available to use
 
