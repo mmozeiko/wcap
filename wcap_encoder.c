@@ -467,6 +467,9 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->InputTexture));
 			HR(ID3D11Device_CreateRenderTargetView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
 			HR(ID3D11Device_CreateShaderResourceView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView));
+
+			FLOAT Black[] = { 0, 0, 0, 0 };
+			ID3D11DeviceContext_ClearRenderTargetView(Encoder->Context, Encoder->InputRenderTarget, Black);
 		}
 
 		// RGB resized texture
@@ -564,8 +567,8 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 			}
 		}
 
-		Encoder->InputWidth = InputWidth;
-		Encoder->InputHeight = InputHeight;
+		Encoder->InputWidth = Config->Width;
+		Encoder->InputHeight = Config->Height;
 		Encoder->OutputWidth = OutputWidth;
 		Encoder->OutputHeight = OutputHeight;
 		Encoder->FramerateNum = Config->FramerateNum;
