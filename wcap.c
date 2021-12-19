@@ -261,9 +261,6 @@ static void EncodeCapturedAudio(void)
 		return;
 	}
 
-	LARGE_INTEGER c1;
-	QueryPerformanceCounter(&c1);
-
 	LPVOID Data;
 	UINT32 FrameCount;
 	UINT64 Time;
@@ -277,11 +274,11 @@ static void EncodeCapturedAudio(void)
 
 			// figure out how much time (100nsec units) and frame count to skip from current buffer
 			UINT64 TimeToSkip = gEncoder.StartTime - Time;
-			UINT32 FramesToSkip = (UINT32)((TimeToSkip * SampleRate - 1) / 10000000 + 1);
+			UINT32 FramesToSkip = (UINT32)((TimeToSkip * SampleRate - 1) / MF_UNITS_PER_SECOND + 1);
 			if (FramesToSkip < FramesToEncode)
 			{
 				// need to skip part of captured data
-				Time += FramesToSkip * 10000000 / SampleRate;
+				Time += FramesToSkip * MF_UNITS_PER_SECOND / SampleRate;
 				FramesToEncode -= FramesToSkip;
 				if (Data)
 				{
@@ -296,6 +293,7 @@ static void EncodeCapturedAudio(void)
 		}
 		if (FramesToEncode != 0)
 		{
+			Assert(Time >= gEncoder.StartTime);
 			Encoder_NewSamples(&gEncoder, Data, FramesToEncode, Time, gTickFreq.QuadPart);
 		}
 		Audio_ReleaseBuffer(&gAudio, FrameCount);

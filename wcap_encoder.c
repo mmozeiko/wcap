@@ -787,8 +787,8 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	{
 		Encoder->StartTime = Time;
 	}
-	HR(IMFSample_SetSampleDuration(VideoSample, MFllMulDiv(Encoder->FramerateDen, 10000000, Encoder->FramerateNum, 0)));
-	HR(IMFSample_SetSampleTime(VideoSample, MFllMulDiv(Time - Encoder->StartTime, 10000000, TimePeriod, 0)));
+	HR(IMFSample_SetSampleDuration(VideoSample, MFllMulDiv(Encoder->FramerateDen, MF_UNITS_PER_SECOND, Encoder->FramerateNum, 0)));
+	HR(IMFSample_SetSampleTime(VideoSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
 	// submit to encoder which will happen in background
 	HR(IMFTrackedSample_SetAllocator(VideoTracked, &Encoder->VideoSampleCallback, NULL));
@@ -801,7 +801,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 
 void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UINT64 Time, UINT64 TimePeriod)
 {
-	IMFSample* VideoSample = Encoder->AudioInputSample;
+	IMFSample* AudioSample = Encoder->AudioInputSample;
 	IMFMediaBuffer* Buffer = Encoder->AudioInputBuffer;
 
 	BYTE* BufferData;
@@ -825,10 +825,10 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UIN
 
 	// setup input time & duration
 	Assert(Encoder->StartTime != 0);
-	HR(IMFSample_SetSampleDuration(VideoSample, MFllMulDiv(VideoCount, 10000000, Encoder->AudioSampleRate, 0)));
-	HR(IMFSample_SetSampleTime(VideoSample, MFllMulDiv(Time - Encoder->StartTime, 10000000, TimePeriod, 0)));
+	HR(IMFSample_SetSampleDuration(AudioSample, MFllMulDiv(VideoCount, MF_UNITS_PER_SECOND, Encoder->AudioSampleRate, 0)));
+	HR(IMFSample_SetSampleTime(AudioSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
-	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, VideoSample, 0));
+	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0));
 	Encoder__OutputAudioSamples(Encoder);
 }
 
@@ -837,14 +837,14 @@ void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT6
 	MF_SINK_WRITER_STATISTICS Stats = { .cb = sizeof(Stats) };
 	HR(IMFSinkWriter_GetStatistics(Encoder->Writer, Encoder->VideoStreamIndex, &Stats));
 
-	*Bitrate = (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, 10000000, 1000 * Stats.llLastTimestampProcessed, 0);
+	*Bitrate = (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, MF_UNITS_PER_SECOND, 1000 * Stats.llLastTimestampProcessed, 0);
 	*LengthMsec = (DWORD)(Stats.llLastTimestampProcessed / 10000);
 	*FileSize = Stats.qwByteCountProcessed;
 
 	if (Encoder->AudioStreamIndex >= 0)
 	{
 		HR(IMFSinkWriter_GetStatistics(Encoder->Writer, Encoder->AudioStreamIndex, &Stats));
-		*Bitrate += (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, 10000000, 1000 * Stats.llLastTimestampProcessed, 0);
+		*Bitrate += (DWORD)MFllMulDiv(8 * Stats.qwByteCountProcessed, MF_UNITS_PER_SECOND, 1000 * Stats.llLastTimestampProcessed, 0);
 		*FileSize += Stats.qwByteCountProcessed;
 	}
 }

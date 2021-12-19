@@ -18,3 +18,6 @@
 
 // calculates ceil(X * Num / Den)
 #define MUL_DIV_ROUND_UP(X, Num, Den) (((X) * (Num) - 1) / (Den) + 1)
+
+// MF works with 100nsec units
+#define MF_UNITS_PER_SECOND 10000000ULL
