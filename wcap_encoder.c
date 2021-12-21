@@ -560,6 +560,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Encoder->FramerateNum = Config->FramerateNum;
 		Encoder->FramerateDen = Config->FramerateDen;
 		Encoder->VideoDiscontinuity = FALSE;
+		Encoder->VideoLastTime = 0x8000000000000000ULL; // some large time in future
 		Encoder->VideoIndex = 0;
 		Encoder->VideoCount = ENCODER_VIDEO_BUFFER_COUNT;
 	}
@@ -691,6 +692,8 @@ void Encoder_Stop(Encoder* Encoder)
 
 BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod)
 {
+	Encoder->VideoLastTime = Time;
+
 	if (Encoder->VideoCount == 0)
 	{
 		// dropped frame
@@ -815,6 +818,18 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UIN
 
 	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0));
 	Encoder__OutputAudioSamples(Encoder);
+}
+
+void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod)
+{
+	// if there was no frame during last second, add discontinuity
+	if (Time - Encoder->VideoLastTime >= TimePeriod)
+	{
+		Encoder->VideoLastTime = Time;
+		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
+		HR(IMFSinkWriter_SendStreamTick(Encoder->Writer, Encoder->VideoStreamIndex, Timestamp));
+		Encoder->VideoDiscontinuity = TRUE;
+	}
 }
 
 void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize)

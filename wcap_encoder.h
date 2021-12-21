@@ -46,6 +46,7 @@ typedef struct Encoder {
 	IMFTrackedSample*          VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
 
 	BOOL          VideoDiscontinuity;
+	UINT64        VideoLastTime;
 	DWORD         VideoIndex; // next index to use
 	volatile LONG VideoCount; // how many samples are currently available to use
 
@@ -76,4 +77,5 @@ void Encoder_Stop(Encoder* Encoder);
 
 BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod);
 void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UINT64 Time, UINT64 TimePeriod);
+void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod);
 void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize);

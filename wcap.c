@@ -42,6 +42,9 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 #define WCAP_AUDIO_CAPTURE_TIMER    1
 #define WCAP_AUDIO_CAPTURE_INTERVAL 100 // msec
 
+#define WCAP_VIDEO_UPDATE_TIMER     2
+#define WCAP_VIDEO_UPDATE_INTERVAL  100 // msec
+
 #define CMD_WCAP     1
 #define CMD_QUIT     2
 #define CMD_SETTINGS 3
@@ -250,6 +253,7 @@ static void StartRecording(ID3D11Device* Device, LPCWSTR Caption)
 	{
 		SetTimer(gWindow, WCAP_AUDIO_CAPTURE_TIMER, WCAP_AUDIO_CAPTURE_INTERVAL, NULL);
 	}
+	SetTimer(gWindow, WCAP_VIDEO_UPDATE_TIMER, WCAP_VIDEO_UPDATE_INTERVAL, NULL);
 
 	if (gConfig.ShowNotifications)
 	{
@@ -321,6 +325,7 @@ static void StopRecording(void)
 		EncodeCapturedAudio();
 		Audio_Stop(&gAudio);
 	}
+	KillTimer(gWindow, WCAP_VIDEO_UPDATE_TIMER);
 
 	Capture_Stop(&gCapture);
 	Encoder_Stop(&gEncoder);
@@ -902,10 +907,20 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	}
 	else if (Message == WM_TIMER)
 	{
-		if (WParam == WCAP_AUDIO_CAPTURE_TIMER && gRecording)
+		if (gRecording)
 		{
-			EncodeCapturedAudio();
-			return 0;
+			if (WParam == WCAP_AUDIO_CAPTURE_TIMER)
+			{
+				EncodeCapturedAudio();
+				return 0;
+			}
+			else if (WParam == WCAP_VIDEO_UPDATE_TIMER)
+			{
+				LARGE_INTEGER Time;
+				QueryPerformanceCounter(&Time);
+				Encoder_Update(&gEncoder, Time.QuadPart, gTickFreq.QuadPart);
+				return 0;
+			}
 		}
 	}
 	else if (Message == WM_POWERBROADCAST)
