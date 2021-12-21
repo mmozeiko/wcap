@@ -82,10 +82,14 @@ Future plans
 Changelog
 =========
 
+##### 2021.12.21
+ * allow to choose integrated vs discrete GPU to use for encoding
+ * keep proper encoded video stream time when no new frames are captured
+
 ##### 2021.12.18
  * fixed wrong audio timestamps when encoding audio
  * fixed wrong d3d11 calls to copy texture when size is odd
- * fixed hang when encoding audio & video with too many dropped frames
+ * fixed hanging when encoding audio & video with too many dropped frames
 
 ##### 2021.12.08
  * fixed compute shaders to work on older D3D11 hardware
