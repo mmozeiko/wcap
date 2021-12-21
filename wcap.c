@@ -4,6 +4,7 @@
 #include "wcap_capture.h"
 #include "wcap_encoder.h"
 
+#include <dxgi1_6.h>
 #include <d3d11.h>
 #include <dwmapi.h>
 #include <shlobj.h>
@@ -15,6 +16,7 @@
 #pragma comment (lib, "user32.lib")
 #pragma comment (lib, "gdi32.lib")
 #pragma comment (lib, "msimg32.lib")
+#pragma comment (lib, "dxgi.lib")
 #pragma comment (lib, "d3d11.lib")
 #pragma comment (lib, "dwmapi.lib")
 #pragma comment (lib, "shell32.lib")
@@ -28,6 +30,9 @@
 #pragma comment (lib, "wmcodecdspuuid.lib")
 #pragma comment (lib, "avrt.lib")
 #pragma comment (lib, "uxtheme.lib")
+
+// this is needed to be able to use Nvidia Media Foundation encoders on Optimus systems
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
 
 #define WM_WCAP_ALREADY_RUNNING (WM_USER+1)
 #define WM_WCAP_STOP_CAPTURE    (WM_USER+2)
@@ -176,7 +181,7 @@ static void ShowFileInFolder(LPCWSTR Filename)
 	}
 }
 
-static void StartRecording(LPCWSTR Caption)
+static void StartRecording(ID3D11Device* Device, LPCWSTR Caption)
 {
 	SYSTEMTIME Time;
 	GetLocalTime(&Time);
@@ -219,18 +224,20 @@ static void StartRecording(LPCWSTR Caption)
 		{
 			ShowNotification(L"Cannot capture audio!", L"Cannot Start Recording", NIIF_WARNING);
 			Capture_Stop(&gCapture);
+			ID3D11Device_Release(Device);
 			return;
 		}
 		EncConfig.AudioFormat = gAudio.Format;
 	}
 
-	if (!Encoder_Start(&gEncoder, gRecordingPath, &EncConfig))
+	if (!Encoder_Start(&gEncoder, Device, gRecordingPath, &EncConfig))
 	{
 		if (gConfig.CaptureAudio)
 		{
 			Audio_Stop(&gAudio);
 		}
 		Capture_Stop(&gCapture);
+		ID3D11Device_Release(Device);
 		return;
 	}
 
@@ -251,6 +258,8 @@ static void StartRecording(LPCWSTR Caption)
 	UpdateTrayIcon(gIcon2);
 	gRecordingState = SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 	gRecording = TRUE;
+
+	ID3D11Device_Release(Device);
 }
 
 static void EncodeCapturedAudio(void)
@@ -334,6 +343,51 @@ static void StopRecording(void)
 	}
 }
 
+static ID3D11Device* CreateDevice(void)
+{
+	IDXGIAdapter* Adapter = NULL;
+
+	if (gConfig.HardwareEncoder)
+	{
+		IDXGIFactory* Factory;
+		if (SUCCEEDED(CreateDXGIFactory(&IID_IDXGIFactory, (void**)&Factory)))
+		{
+			IDXGIFactory6* Factory6;
+			if (SUCCEEDED(IDXGIFactory_QueryInterface(Factory, &IID_IDXGIFactory6, (void**)&Factory6)))
+			{
+				DXGI_GPU_PREFERENCE Preference = gConfig.HardwarePreferIntegrated ? DXGI_GPU_PREFERENCE_MINIMUM_POWER : DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE;
+				if (FAILED(IDXGIFactory6_EnumAdapterByGpuPreference(Factory6, 0, Preference, &IID_IDXGIAdapter, &Adapter)))
+				{
+					// just to be safe
+					Adapter = NULL;
+				}
+				IDXGIFactory6_Release(Factory6);
+			}
+			IDXGIFactory_Release(Factory);
+		}
+	}
+
+	ID3D11Device* Device;
+
+	UINT flags = 0;
+#ifdef _DEBUG
+	flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+	// if adapter is selected then driver type must be unknown
+	D3D_DRIVER_TYPE Driver = Adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+	if (FAILED(D3D11CreateDevice(Adapter, Driver, NULL, flags, (D3D_FEATURE_LEVEL[]) { D3D_FEATURE_LEVEL_11_0 }, 1, D3D11_SDK_VERSION, &Device, NULL, NULL)))
+	{
+		ShowNotification(L"Cannot to create D3D11 device!", L"Error", NIIF_ERROR);
+		Device = NULL;
+	}
+	if (Adapter)
+	{
+		IDXGIAdapter_Release(Adapter);
+	}
+
+	return Device;
+}
+
 static void CaptureWindow(void)
 {
 	HWND Window = GetForegroundWindow();
@@ -368,8 +422,15 @@ static void CaptureWindow(void)
 		return;
 	}
 
-	if (!Capture_CreateWindow(&gCapture, Window, gConfig.OnlyClientArea))
+	ID3D11Device* Device = CreateDevice();
+	if (!Device)
 	{
+		return;
+	}
+
+	if (!Capture_CreateForWindow(&gCapture, Device, Window, gConfig.OnlyClientArea))
+	{
+		ID3D11Device_Release(Device);
 		ShowNotification(L"Cannot record selected window!", L"Error", NIIF_WARNING);
 		return;
 	}
@@ -377,7 +438,7 @@ static void CaptureWindow(void)
 	WCHAR WindowTitle[1024];
 	GetWindowTextW(Window, WindowTitle, _countof(WindowTitle));
 
-	StartRecording(WindowTitle);
+	StartRecording(Device, WindowTitle);
 }
 
 static void CaptureMonitor(void)
@@ -392,7 +453,13 @@ static void CaptureMonitor(void)
 		return;
 	}
 
-	if (!Capture_CreateMonitor(&gCapture, Monitor, NULL))
+	ID3D11Device* Device = CreateDevice();
+	if (!Device)
+	{
+		return;
+	}
+
+	if (!Capture_CreateForMonitor(&gCapture, Device, Monitor, NULL))
 	{
 		ShowNotification(L"Cannot record selected monitor!", L"Error", NIIF_WARNING);
 		return;
@@ -444,7 +511,7 @@ static void CaptureMonitor(void)
 	}
 
 	// if cannot get monitor name, just use device name
-	StartRecording(MonitorName[0] ? MonitorName : Info.szDevice);
+	StartRecording(Device, MonitorName[0] ? MonitorName : Info.szDevice);
 }
 
 static void CaptureRectangleInit(void)
@@ -568,7 +635,13 @@ static void CaptureRectangle(void)
 	SetWindowPos(gWindow, HWND_TOPMOST, X, Y, W, H, SWP_SHOWWINDOW);
 	InvalidateRect(gWindow, NULL, FALSE);
 
-	if (!Capture_CreateMonitor(&gCapture, gRectMonitor, &Rect))
+	ID3D11Device* Device = CreateDevice();
+	if (!Device)
+	{
+		return;
+	}
+
+	if (!Capture_CreateForMonitor(&gCapture, Device, gRectMonitor, &Rect))
 	{
 		ShowNotification(L"Cannot record monitor!", L"Error", NIIF_WARNING);
 		return;
@@ -577,7 +650,7 @@ static void CaptureRectangle(void)
 	WCHAR Text[128];
 	wsprintfW(Text, L"%d x %d", Rect.right - Rect.left, Rect.bottom - Rect.top);
 
-	StartRecording(Text);
+	StartRecording(Device, Text);
 }
 
 static int GetPointResize(int X, int Y)
@@ -1222,19 +1295,6 @@ void WinMainCRTStartup()
 		ExitProcess(0);
 	}
 
-	ID3D11Device* Device;
-	ID3D11DeviceContext* Context;
-
-	UINT flags = 0;
-#ifdef _DEBUG
-	flags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
-	if (FAILED(D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, flags, NULL, 0, D3D11_SDK_VERSION, &Device, NULL, &Context)))
-	{
-		MessageBoxW(NULL, L"Failed to create D3D11 device!", WCAP_TITLE, MB_ICONEXCLAMATION);
-		ExitProcess(0);
-	}
-
 	GetModuleFileNameW(NULL, gConfigPath, _countof(gConfigPath));
 	PathRenameExtensionW(gConfigPath, L".ini");
 
@@ -1243,8 +1303,8 @@ void WinMainCRTStartup()
 	Config_Defaults(&gConfig);
 	Config_Load(&gConfig, gConfigPath);
 	Audio_Init(&gAudio);
-	Capture_Init(&gCapture, Device, &OnCaptureClose, &OnCaptureFrame);
-	Encoder_Init(&gEncoder, Device, Context);
+	Capture_Init(&gCapture, &OnCaptureClose, &OnCaptureFrame);
+	Encoder_Init(&gEncoder);
 
 	QueryPerformanceFrequency(&gTickFreq);
 

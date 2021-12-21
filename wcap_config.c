@@ -14,8 +14,8 @@
 #define ID_SHOW_NOTIFICATIONS  10
 #define ID_MOUSE_CURSOR        20
 #define ID_ONLY_CLIENT_AREA    30
-#define ID_HARDWARE_ENCODER    40
-#define ID_CAPTURE_AUDIO       50
+#define ID_CAPTURE_AUDIO       40
+#define ID_GPU_ENCODER         50
 #define ID_OUTPUT_FOLDER       60
 #define ID_OPEN_FOLDER         70
 #define ID_FRAGMENTED_MP4      80
@@ -52,8 +52,8 @@
 #define CONTROL_COMBOBOX  0x0085
 
 // group box width/height
-#define COL00W 100
-#define COL01W 174
+#define COL00W 120
+#define COL01W 154
 #define COL10W 144
 #define COL11W 130
 #define ROW0H 86
@@ -164,8 +164,9 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	CheckDlgButton(Window, ID_SHOW_NOTIFICATIONS, Config->ShowNotifications);
 	CheckDlgButton(Window, ID_MOUSE_CURSOR,       Config->MouseCursor);
 	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,   Config->OnlyClientArea);
-	CheckDlgButton(Window, ID_HARDWARE_ENCODER,   Config->HardwareEncoder);
 	CheckDlgButton(Window, ID_CAPTURE_AUDIO,      Config->CaptureAudio);
+	CheckDlgButton(Window, ID_GPU_ENCODER,        Config->HardwareEncoder);
+	SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_SETCURSEL, Config->HardwarePreferIntegrated ? 0 : 1, 0);
 
 	// output
 	SetDlgItemTextW(Window, ID_OUTPUT_FOLDER,  Config->OutputFolder);
@@ -219,6 +220,7 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	SetDlgItemTextW(Window, ID_SHORTCUT_RECT, Text);
 	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT), GWLP_USERDATA, Config->ShortcutRect);
 
+	EnableWindow(GetDlgItem(Window, ID_GPU_ENCODER + 1),  Config->HardwareEncoder);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), Config->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   Config->EnableLimitSize);
 	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     Capture_CanHideMouseCursor());
@@ -302,6 +304,9 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"44100");
 		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"48000");
 
+		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L"Prefer iGPU");
+		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L"Prefer dGPU");
+
 		Config__SetDialogValues(Window, Config);
 
 		SetForegroundWindow(Window);
@@ -323,8 +328,10 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			Config->ShowNotifications = IsDlgButtonChecked(Window, ID_SHOW_NOTIFICATIONS);
 			Config->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
 			Config->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
-			Config->HardwareEncoder   = IsDlgButtonChecked(Window, ID_HARDWARE_ENCODER);
 			Config->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
+			Config->HardwareEncoder   = IsDlgButtonChecked(Window, ID_GPU_ENCODER);
+			Config->HardwarePreferIntegrated = (DWORD)SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_GETCURSEL, 0, 0) == 0;
+
 			// output
 			GetDlgItemTextW(Window, ID_OUTPUT_FOLDER, Config->OutputFolder, _countof(Config->OutputFolder));
 			Config->OpenFolder        = IsDlgButtonChecked(Window, ID_OPEN_FOLDER);
@@ -351,7 +358,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			{
 				Config->AudioBitrate = gAudioBitrates[SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_GETCURSEL, 0, 0)];
 			}
-			//shortcuts
+			// shortcuts
 			Config->ShortcutMonitor = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_MONITOR), GWLP_USERDATA);
 			Config->ShortcutWindow  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW),  GWLP_USERDATA);
 			Config->ShortcutRect    = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT),    GWLP_USERDATA);
@@ -386,6 +393,11 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		{
 			LRESULT Index = SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_GETCURSEL, 0, 0);
 			Config__UpdateAudioBitrate(Window, (int)Index, Config);
+			return TRUE;
+		}
+		else if (Control == ID_GPU_ENCODER && HIWORD(WParam) == BN_CLICKED)
+		{
+			EnableWindow(GetDlgItem(Window, ID_GPU_ENCODER + 1), (BOOL)SendDlgItemMessageW(Window, ID_GPU_ENCODER, BM_GETCHECK, 0, 0));
 			return TRUE;
 		}
 		else if (Control == ID_LIMIT_LENGTH && HIWORD(WParam) == BN_CLICKED)
@@ -594,15 +606,6 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 			int ItemW = W;
 			int ItemId = Item->Id;
 
-			if (HasCombobox || (HasNumber || HasHotKey) && !HasCheckbox)
-			{
-				// label, only for controls without checkbox, or combobox
-				Data = Config__DoDialogItem(Data, Item->Text, -1, CONTROL_STATIC, 0, ItemX, Y, Item->Width, ITEM_HEIGHT);
-				ItemCount++;
-				ItemX += Item->Width + PADDING;
-				ItemW -= Item->Width + PADDING;
-			}
-
 			if (HasCheckbox)
 			{
 				if (!OnlyCheckbox)
@@ -618,6 +621,15 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 					ItemX += Item->Width + PADDING;
 					ItemW = W - (Item->Width + PADDING);
 				}
+			}
+
+			if ((HasCombobox && !HasCheckbox) || (HasNumber || HasHotKey) && !HasCheckbox)
+			{
+				// label, only for controls without checkbox, or combobox
+				Data = Config__DoDialogItem(Data, Item->Text, -1, CONTROL_STATIC, 0, ItemX, Y, Item->Width, ITEM_HEIGHT);
+				ItemCount++;
+				ItemX += Item->Width + PADDING;
+				ItemW -= Item->Width + PADDING;
 			}
 
 			if (HasNumber)
@@ -671,8 +683,9 @@ void Config_Defaults(Config* Config)
 		.ShowNotifications = TRUE,
 		.MouseCursor = TRUE,
 		.OnlyClientArea = TRUE,
-		.HardwareEncoder = TRUE,
 		.CaptureAudio = TRUE,
+		.HardwareEncoder = TRUE,
+		.HardwarePreferIntegrated = FALSE,
 		// output
 		.OpenFolder = TRUE,
 		.FragmentedOutput = FALSE,
@@ -755,11 +768,12 @@ static void Config__GetStr(LPCWSTR FileName, LPCWSTR Key, DWORD* Value, const LP
 void Config_Load(Config* Config, LPCWSTR FileName)
 {
 	// capture
-	Config__GetBool(FileName, L"ShowNotifications", &Config->ShowNotifications);
-	Config__GetBool(FileName, L"MouseCursor",       &Config->MouseCursor);
-	Config__GetBool(FileName, L"OnlyClientArea",    &Config->OnlyClientArea);
-	Config__GetBool(FileName, L"HardwareEncoder",   &Config->HardwareEncoder);
-	Config__GetBool(FileName, L"CaptureAudio",      &Config->CaptureAudio);
+	Config__GetBool(FileName, L"ShowNotifications",        &Config->ShowNotifications);
+	Config__GetBool(FileName, L"MouseCursor",              &Config->MouseCursor);
+	Config__GetBool(FileName, L"OnlyClientArea",           &Config->OnlyClientArea);
+	Config__GetBool(FileName, L"CaptureAudio",             &Config->CaptureAudio);
+	Config__GetBool(FileName, L"HardwareEncoder",          &Config->HardwareEncoder);
+	Config__GetBool(FileName, L"HardwarePreferIntegrated", &Config->HardwarePreferIntegrated);
 	// output
 	WCHAR OutputFolder[MAX_PATH];
 	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", L"", OutputFolder, _countof(OutputFolder), FileName);
@@ -798,11 +812,12 @@ static Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
 void Config_Save(Config* Config, LPCWSTR FileName)
 {
 	// capture
-	WritePrivateProfileStringW(INI_SECTION, L"ShowNotifications", Config->ShowNotifications ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",       Config->MouseCursor       ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",    Config->OnlyClientArea    ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",   Config->HardwareEncoder   ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",      Config->CaptureAudio      ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"ShowNotifications",         Config->ShowNotifications        ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",               Config->MouseCursor              ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",            Config->OnlyClientArea           ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",              Config->CaptureAudio             ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",           Config->HardwareEncoder          ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegratged", Config->HardwarePreferIntegrated ? L"1" : L"0", FileName);
 	// output
 	WritePrivateProfileStringW(INI_SECTION, L"OutputFolder",      Config->OutputFolder, FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OpenFolder",        Config->OpenFolder        ? L"1" : L"0", FileName);
@@ -849,11 +864,11 @@ BOOL Config_ShowDialog(Config* Config)
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Show &Notifications", ID_SHOW_NOTIFICATIONS, ITEM_CHECKBOX },
-					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       ITEM_CHECKBOX },
-					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   ITEM_CHECKBOX },
-					{ "Hardware &Encoder",   ID_HARDWARE_ENCODER,   ITEM_CHECKBOX },
-					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      ITEM_CHECKBOX },
+					{ "Show &Notifications", ID_SHOW_NOTIFICATIONS, ITEM_CHECKBOX                     },
+					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       ITEM_CHECKBOX                     },
+					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   ITEM_CHECKBOX                     },
+					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      ITEM_CHECKBOX                     },
+					{ "GPU &Encoder",        ID_GPU_ENCODER,        ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
 					{ NULL },
 				},
 			},
@@ -875,12 +890,12 @@ BOOL Config_ShowDialog(Config* Config)
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Codec",             ID_VIDEO_CODEC,         ITEM_COMBOBOX, 64 },
-					{ "Profile",           ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 64 },
-					{ "Max &Width",        ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   64 },
-					{ "Max &Height",       ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   64 },
-					{ "Max &Framerate",    ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   64 },
-					{ "Bitrate (kbit/s)",  ID_VIDEO_BITRATE,       ITEM_NUMBER,   64 },
+					{ "Codec",            ID_VIDEO_CODEC,         ITEM_COMBOBOX, 64 },
+					{ "Profile",          ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 64 },
+					{ "Max &Width",       ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   64 },
+					{ "Max &Height",      ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   64 },
+					{ "Max &Framerate",   ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   64 },
+					{ "Bitrate (kbit/s)", ID_VIDEO_BITRATE,       ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},

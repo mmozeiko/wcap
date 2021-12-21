@@ -17,8 +17,9 @@ typedef struct Config {
 	BOOL ShowNotifications;
 	BOOL MouseCursor;
 	BOOL OnlyClientArea;
-	BOOL HardwareEncoder;
 	BOOL CaptureAudio;
+	BOOL HardwareEncoder;
+	BOOL HardwarePreferIntegrated;
 	// output
 	WCHAR OutputFolder[MAX_PATH];
 	BOOL OpenFolder;

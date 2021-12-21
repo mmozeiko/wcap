@@ -1,5 +1,6 @@
 #include "wcap.h"
 #include <d3d11.h>
+#include <dxgi.h>
 
 typedef struct IGraphicsCaptureItemInterop        IGraphicsCaptureItemInterop;
 typedef struct IDirect3D11CaptureFramePoolStatics IDirect3D11CaptureFramePoolStatics;
@@ -15,6 +16,7 @@ typedef void CaptureCloseCallback(void);
 typedef void CaptureFrameCallback(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time);
 
 typedef struct Capture {
+	HRESULT (WINAPI* CreateDirect3D11DeviceFromDXGIDevice)(IDXGIDevice*, LPVOID*);
 	IGraphicsCaptureItemInterop* ItemInterop;
 	IDirect3D11CaptureFramePoolStatics* FramePoolStatics;
 	IDirect3DDevice* Device;
@@ -35,9 +37,9 @@ typedef struct Capture {
 
 BOOL Capture_IsSupported(void);
 BOOL Capture_CanHideMouseCursor(void);
-void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback);
+void Capture_Init(Capture* Capture, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback);
 
-BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea);
-BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor, RECT* Rect);
+BOOL Capture_CreateForWindow(Capture* Capture, ID3D11Device* Device, HWND Window, BOOL OnlyClientArea);
+BOOL Capture_CreateForMonitor(Capture* Capture, ID3D11Device* Device, HMONITOR Monitor, RECT* Rect);
 void Capture_Start(Capture* Capture, BOOL WithMouseCursor);
 void Capture_Stop(Capture* Capture);

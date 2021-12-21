@@ -132,30 +132,28 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 	}
 }
 
-void Encoder_Init(Encoder* Encoder, ID3D11Device* Device, ID3D11DeviceContext* Context)
+void Encoder_Init(Encoder* Encoder)
 {
 	HR(MFStartup(MF_VERSION, MFSTARTUP_LITE));
-	UINT Token;
+	Encoder->VideoSampleCallback.lpVtbl = &Encoder__VideoSampleCallbackVtbl;
+	Encoder->AudioSampleCallback.lpVtbl = &Encoder__AudioSampleCallbackVtbl;
+}
 
+BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, const EncoderConfig* Config)
+{
+	UINT Token;
 	IMFDXGIDeviceManager* Manager;
 	HR(MFCreateDXGIDeviceManager(&Token, &Manager));
 	HR(IMFDXGIDeviceManager_ResetDevice(Manager, (IUnknown*)Device, Token));
 
-	ID3D11Device_AddRef(Device);
-	ID3D11DeviceContext_AddRef(Context);
+	ID3D11DeviceContext* Context;
+	ID3D11Device_GetImmediateContext(Device, &Context);
 
-	Encoder->Manager = Manager;
-	Encoder->Context = Context;
-	Encoder->Device = Device;
-	Encoder->VideoSampleCallback.lpVtbl = &Encoder__VideoSampleCallbackVtbl;
-	Encoder->AudioSampleCallback.lpVtbl = &Encoder__AudioSampleCallbackVtbl;
+	ID3D11ComputeShader* ResizeShader;
+	ID3D11ComputeShader* ConvertShader;
+	HR(ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes, sizeof(ResizeShaderBytes), NULL, &ResizeShader));
+	HR(ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &ConvertShader));
 
-	HR(ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes,  sizeof(ResizeShaderBytes),  NULL, &Encoder->ResizeShader));
-	HR(ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &Encoder->ConvertShader));
-}
-
-BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Config)
-{
 	DWORD InputWidth = Config->Width;
 	DWORD InputHeight = Config->Height;
 	DWORD OutputWidth = Config->Config->VideoMaxWidth;
@@ -244,7 +242,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		IMFAttributes* Attributes;
 		HR(MFCreateAttributes(&Attributes, 4));
 		HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, Config->Config->HardwareEncoder));
-		HR(IMFAttributes_SetUnknown(Attributes, &MF_SINK_WRITER_D3D_MANAGER, (IUnknown*)Encoder->Manager));
+		HR(IMFAttributes_SetUnknown(Attributes, &MF_SINK_WRITER_D3D_MANAGER, (IUnknown*)Manager));
 		HR(IMFAttributes_SetUINT32(Attributes, &MF_SINK_WRITER_DISABLE_THROTTLING, TRUE));
 		HR(IMFAttributes_SetGUID(Attributes, &MF_TRANSCODE_CONTAINERTYPE, Container));
 
@@ -452,12 +450,12 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.Usage = D3D11_USAGE_DEFAULT,
 				.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
 			};
-			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->InputTexture));
-			HR(ID3D11Device_CreateRenderTargetView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
-			HR(ID3D11Device_CreateShaderResourceView(Encoder->Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView));
+			HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->InputTexture));
+			HR(ID3D11Device_CreateRenderTargetView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
+			HR(ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView));
 
 			FLOAT Black[] = { 0, 0, 0, 0 };
-			ID3D11DeviceContext_ClearRenderTargetView(Encoder->Context, Encoder->InputRenderTarget, Black);
+			ID3D11DeviceContext_ClearRenderTargetView(Context, Encoder->InputRenderTarget, Black);
 		}
 
 		// RGB resized texture
@@ -481,7 +479,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.Usage = D3D11_USAGE_DEFAULT,
 				.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE,
 			};
-			HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Encoder->ResizedTexture));
+			HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->ResizedTexture));
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC ResourceView =
 			{
@@ -490,7 +488,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.Texture2D.MipLevels = 1,
 				.Texture2D.MostDetailedMip = 0,
 			};
-			HR(ID3D11Device_CreateShaderResourceView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, &ResourceView, &Encoder->ConvertInputView));
+			HR(ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &ResourceView, &Encoder->ConvertInputView));
 
 			// because D3D 11.0 does not support B8G8R8A8_UNORM for UAV, create uint UAV used on BGRA texture
 			D3D11_UNORDERED_ACCESS_VIEW_DESC AccessViewDesc =
@@ -499,7 +497,7 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 				.Texture2D.MipSlice = 0,
 			};
-			HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView));
+			HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView));
 		}
 
 		// NV12 converted texture
@@ -539,9 +537,9 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 				IMFTrackedSample* VideoTracked;
 
 				ID3D11Texture2D* Texture;
-				HR(ID3D11Device_CreateTexture2D(Encoder->Device, &TextureDesc, NULL, &Texture));
-				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertOutputViewY[i]));
-				HR(ID3D11Device_CreateUnorderedAccessView(Encoder->Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertOutputViewUV[i]));
+				HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Texture));
+				HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertOutputViewY[i]));
+				HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertOutputViewUV[i]));
 				HR(MFCreateVideoSampleFromSurface(NULL, &VideoSample));
 				HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, 0, FALSE, &Buffer));
 				HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
@@ -607,6 +605,15 @@ BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Confi
 		Encoder->AudioIndex = 0;
 	}
 
+	ID3D11Device_AddRef(Device);
+	ID3D11DeviceContext_AddRef(Context);
+	ID3D11ComputeShader_AddRef(ResizeShader);
+	ID3D11ComputeShader_AddRef(ConvertShader);
+	Encoder->Context = Context;
+	Encoder->Device = Device;
+	Encoder->ResizeShader = ResizeShader;
+	Encoder->ConvertShader = ConvertShader;
+
 	Encoder->StartTime = 0;
 	Encoder->Writer = Writer;
 	Writer = NULL;
@@ -623,6 +630,10 @@ bail:
 		IMFSinkWriter_Release(Writer);
 		DeleteFileW(FileName);
 	}
+	ID3D11ComputeShader_Release(ResizeShader);
+	ID3D11ComputeShader_Release(ConvertShader);
+	ID3D11DeviceContext_Release(Context);
+	IMFDXGIDeviceManager_Release(Manager);
 
 	return Result;
 }
@@ -672,7 +683,10 @@ void Encoder_Stop(Encoder* Encoder)
 	ID3D11ShaderResourceView_Release(Encoder->ResizeInputView);
 	ID3D11Texture2D_Release(Encoder->InputTexture);
 
-	ID3D11DeviceContext_Flush(Encoder->Context);
+	ID3D11ComputeShader_Release(Encoder->ResizeShader);
+	ID3D11ComputeShader_Release(Encoder->ConvertShader);
+	ID3D11DeviceContext_Release(Encoder->Context);
+	ID3D11Device_Release(Encoder->Device);
 }
 
 BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod)

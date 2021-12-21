@@ -328,7 +328,7 @@ BOOL Capture_CanHideMouseCursor(void)
 	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 19041);
 }
 
-void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback)
+void Capture_Init(Capture* Capture, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback)
 {
 	// load these entry points dynamically, so we can start .exe on older windows for displaying nicer error message
 	HMODULE CombaseModule = LoadLibraryW(L"combase.dll");
@@ -341,22 +341,17 @@ void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* 
 	HRESULT (WINAPI* RoInitialize)(DWORD) = (void*)GetProcAddress(CombaseModule, "RoInitialize");
 	HRESULT (WINAPI* RoGetActivationFactory)(HSTRING*, const GUID*, void**) = (void*)GetProcAddress(CombaseModule, "RoGetActivationFactory");
 	HRESULT (WINAPI* CreateDispatcherQueueController)(DispatcherQueueOptions, IDispatcherQueueController**) = (void*)GetProcAddress(CoreMessagingModule, "CreateDispatcherQueueController");
-	HRESULT (WINAPI* CreateDirect3D11DeviceFromDXGIDevice)(IDXGIDevice*, LPVOID*) = (void*)GetProcAddress(Direct3D11Module, "CreateDirect3D11DeviceFromDXGIDevice");
+	Capture->CreateDirect3D11DeviceFromDXGIDevice = (void*)GetProcAddress(Direct3D11Module, "CreateDirect3D11DeviceFromDXGIDevice");
 	Assert(RoInitialize);
 	Assert(RoGetActivationFactory);
 	Assert(CreateDispatcherQueueController);
-	Assert(CreateDirect3D11DeviceFromDXGIDevice);
+	Assert(Capture->CreateDirect3D11DeviceFromDXGIDevice);
 
 	const DWORD RO_INIT_SINGLETHREADED = 0;
 	HR(RoInitialize(RO_INIT_SINGLETHREADED));
 
 	HR(RoGetActivationFactory(&GraphicsCaptureItemName, &IID_IGraphicsCaptureItemInterop, (LPVOID*)&Capture->ItemInterop));
 	HR(RoGetActivationFactory(&Direct3D11CaptureFramePoolName, &IID_IDirect3D11CaptureFramePoolStatics, (LPVOID*)&Capture->FramePoolStatics));
-
-	IDXGIDevice* DxgiDevice;
-	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
-	HR(CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (LPVOID*)&Capture->Device));
-	IDXGIDevice_Release(DxgiDevice);
 
 	Capture->OnCloseHandler.vtbl = &Capture__CloseHandlerVtbl;
 	Capture->OnFrameHandler.vtbl = &Capture__FrameHandlerVtbl;
@@ -377,8 +372,13 @@ void Capture_Init(Capture* Capture, ID3D11Device* Device, CaptureCloseCallback* 
 	Capture->FrameCallback = FrameCallback;
 }
 
-BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea)
+BOOL Capture_CreateForWindow(Capture* Capture, ID3D11Device* Device, HWND Window, BOOL OnlyClientArea)
 {
+	IDXGIDevice* DxgiDevice;
+	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
+	HR(Capture->CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (LPVOID*)&Capture->Device));
+	IDXGIDevice_Release(DxgiDevice);
+
 	IGraphicsCaptureItem* Item;
 	if (SUCCEEDED(Capture->ItemInterop->vtbl->CreateForWindow(Capture->ItemInterop, Window, &IID_IGraphicsCaptureItem, (LPVOID*)&Item)))
 	{
@@ -400,14 +400,22 @@ BOOL Capture_CreateWindow(Capture* Capture, HWND Window, BOOL OnlyClientArea)
 
 			return TRUE;
 		}
-
 		Item->vtbl->Release(Item);
 	}
+
+	Capture->Device->vtbl->Release(Capture->Device);
+	Capture->Device = NULL;
+
 	return FALSE;
 }
 
-BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor, RECT* Rect)
+BOOL Capture_CreateForMonitor(Capture* Capture, ID3D11Device* Device, HMONITOR Monitor, RECT* Rect)
 {
+	IDXGIDevice* DxgiDevice;
+	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
+	HR(Capture->CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (LPVOID*)&Capture->Device));
+	IDXGIDevice_Release(DxgiDevice);
+
 	IGraphicsCaptureItem* Item;
 	if (SUCCEEDED(Capture->ItemInterop->vtbl->CreateForMonitor(Capture->ItemInterop, Monitor, &IID_IGraphicsCaptureItem, (LPVOID*)&Item)))
 	{
@@ -425,9 +433,11 @@ BOOL Capture_CreateMonitor(Capture* Capture, HMONITOR Monitor, RECT* Rect)
 			Capture->Rect = Rect ? *Rect : (RECT) { 0, 0, Size.cx, Size.cy };
 			return TRUE;
 		}
-
 		Item->vtbl->Release(Item);
 	}
+
+	Capture->Device->vtbl->Release(Capture->Device);
+	Capture->Device = NULL;
 
 	return FALSE;
 }
@@ -477,5 +487,11 @@ void Capture_Stop(Capture* Capture)
 		Capture->FramePool->vtbl->Release(Capture->FramePool);
 		Capture->Item->vtbl->Release(Capture->Item);
 		Capture->Item = NULL;
+	}
+
+	if (Capture->Device)
+	{
+		Capture->Device->vtbl->Release(Capture->Device);
+		Capture->Device = NULL;
 	}
 }

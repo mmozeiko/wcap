@@ -19,7 +19,6 @@ typedef struct Encoder {
 
 	IMFAsyncCallback VideoSampleCallback;
 	IMFAsyncCallback AudioSampleCallback;
-	IMFDXGIDeviceManager* Manager;
 	ID3D11Device* Device;
 	ID3D11DeviceContext* Context;
 	IMFSinkWriter* Writer;
@@ -71,8 +70,8 @@ typedef struct {
 	Config* Config;
 } EncoderConfig;
 
-void Encoder_Init(Encoder* Encoder, ID3D11Device* Device, ID3D11DeviceContext* Context);
-BOOL Encoder_Start(Encoder* Encoder, LPWSTR FileName, const EncoderConfig* Config);
+void Encoder_Init(Encoder* Encoder);
+BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, const EncoderConfig* Config);
 void Encoder_Stop(Encoder* Encoder);
 
 BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod);
