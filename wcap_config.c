@@ -802,7 +802,7 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 	Config__GetInt(FileName, L"ShortcutRect",    &Config->ShortcutRect,    NULL);
 }
 
-static Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
+static void Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
 {
 	WCHAR Text[64];
 	wsprintfW(Text, L"%u", Value);
