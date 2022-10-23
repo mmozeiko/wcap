@@ -1,0 +1,40 @@
+name: wcap
+
+on:
+  push:
+    branches: main
+  pull_request:
+    branches: main
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          path: repo
+
+      - name: Build
+        shell: cmd
+        run: cd repo && build.cmd
+
+      - name: Checkout wiki
+        uses: actions/checkout@v3
+        if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        with:
+          repository: ${{github.repository}}.wiki
+          path: wiki
+
+      - name: Upload binary
+        if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        shell: cmd
+        run: |
+          copy repo\wcap.exe wiki
+
+          cd wiki
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git commit --all --amend --no-edit
+          git push --force-with-lease
