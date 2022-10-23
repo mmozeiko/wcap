@@ -1,5 +1,5 @@
 // resize & convert input
-Texture2D<float4> Input : register(t0);
+Texture2D<float3> Input : register(t0);
 
 // resize output, packed BGRA format
 RWTexture2D<uint> Output : register(u0);
@@ -30,7 +30,7 @@ float Filter(float x)
 	return 0.0;
 }
 
-[numthreads(16, 16, 1)]
+[numthreads(16, 8, 1)]
 void Resize(uint3 Id: SV_DispatchThreadID)
 {
 	int2 InSize, OutSize;
@@ -45,7 +45,7 @@ void Resize(uint3 Id: SV_DispatchThreadID)
 	int2 End = clamp(int2(Center + Size), int2(0, 0), InSize - int2(1, 1));
 
 	float Weight = 0;
-	float4 Color = float4(0, 0, 0, 0);
+	float3 Color = float3(0, 0, 0);
 	for (int y = Start.y; y <= End.y; y++)
 	{
 		float dy = (Center.y - y - 0.5) * Scale.y;
@@ -68,21 +68,24 @@ void Resize(uint3 Id: SV_DispatchThreadID)
 	}
 
 	// packs float3 Color to uint BGRA output
-	Output[Id.xy] = dot(uint3(floor(clamp(Color.bgr, 0, 1) * 255 + 0.5)), uint3(1, 1 << 8, 1 << 16));
+	Output[Id.xy] = dot(uint3(clamp(Color.bgr, 0, 1) * 255 + 0.5), uint3(1, 1 << 8, 1 << 16));
 }
 
 // BT.709, limited range, Y=[16..235], UV=[16..240]
 // https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-static const float3 ConvertY = float3(  0.2126,  0.7152,  0.0722 ) * 219.0 / 255.0;
-static const float3 ConvertU = float3( -0.1146, -0.3854,  0.5    ) * 224.0 / 255.0;
-static const float3 ConvertV = float3(  0.5,    -0.4542, -0.0458 ) * 224.0 / 255.0;
+static const float3 ConvertY = float3(  0.2126,  0.7152,  0.0722 );
+static const float3 ConvertU = float3( -0.1146, -0.3854,  0.5    );
+static const float3 ConvertV = float3(  0.5,    -0.4542, -0.0458 );
 
-float Average(float4 Color)
+float3 RgbToYuv(float3 Rgb)
 {
-	return floor(dot(Color, 1) * 0.25 + 0.5);
+	float Y = dot(ConvertY.xyz, Rgb) * 219.0 + 16.5;
+	float U = dot(ConvertU.xyz, Rgb) * 224.0 + 128.5;
+	float V = dot(ConvertV.xyz, Rgb) * 224.0 + 128.5;
+	return float3(Y, U, V);
 }
 
-[numthreads(16, 16, 1)]
+[numthreads(16, 8, 1)]
 void Convert(uint3 Id: SV_DispatchThreadID)
 {
 	int2 InSize;
@@ -95,27 +98,27 @@ void Convert(uint3 Id: SV_DispatchThreadID)
 
 	int4 Src = int4(Pos2, min(Pos4.zw, InSize - int2(1, 1)));
 
-	float4 C0 = Input[Src.xy] * 255;
-	float4 C1 = Input[Src.zy] * 255;
-	float4 C2 = Input[Src.xw] * 255;
-	float4 C3 = Input[Src.zw] * 255;
+	// load RGB colors in 2x2 area
+	float3 Rgb0 = Input[Src.xy];
+	float3 Rgb1 = Input[Src.zy];
+	float3 Rgb2 = Input[Src.xw];
+	float3 Rgb3 = Input[Src.zw];
 
-	float4 R = float4(C0.r, C1.r, C2.r, C3.r);
-	float4 G = float4(C0.g, C1.g, C2.g, C3.g);
-	float4 B = float4(C0.b, C1.b, C2.b, C3.b);
+	// convert RGB to YUV
+	float3 Yuv0 = RgbToYuv(Rgb0);
+	float3 Yuv1 = RgbToYuv(Rgb1);
+	float3 Yuv2 = RgbToYuv(Rgb2);
+	float3 Yuv3 = RgbToYuv(Rgb3);
 
-	float3 Avg = float3(Average(R), Average(G), Average(B));
+	// average UV
+	float2 UV = (Yuv0.yz + Yuv1.yz + Yuv2.yz + Yuv3.yz) / 4.0;
 
-	float4 Yf = ConvertY.x * R + ConvertY.y * G + ConvertY.z * B + 16.0;
-	uint4 Y = uint4(clamp(Yf, 16, 255));
-	OutputY[Pos4.xy] = Y.x;
-	OutputY[Pos4.zy] = Y.y;
-	OutputY[Pos4.xw] = Y.z;
-	OutputY[Pos4.zw] = Y.w;
+	// store Y
+	OutputY[Pos4.xy] = uint(Yuv0.x);
+	OutputY[Pos4.zy] = uint(Yuv1.x);
+	OutputY[Pos4.xw] = uint(Yuv2.x);
+	OutputY[Pos4.zw] = uint(Yuv3.x);
 
-	float Uf = dot(ConvertU.xyz, Avg) + 128.5;
-	float Vf = dot(ConvertV.xyz, Avg) + 128.5;
-	uint U = uint(clamp(Uf, 16, 240));
-	uint V = uint(clamp(Vf, 16, 240));
-	OutputUV[Pos] = uint2(U, V);
+	// store UV
+	OutputUV[Pos] = uint2(UV);
 }

@@ -743,7 +743,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ResizeInputView);
 		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, 1, &Encoder->ResizeOutputView, NULL);
 
-		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 15) / 16, 1);
+		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 7) / 8, 1);
 	}
 
 	// convert to YUV
@@ -756,7 +756,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
 		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ConvertInputView);
 
-		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 15) / 16, 1);
+		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 7) / 8, 1);
 	}
 
 	// setup input time & duration
