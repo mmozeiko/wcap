@@ -28,5 +28,5 @@ fxc.exe /nologo /T cs_5_0 /E Resize  /O3 /WX /Fh wcap_resize_shader.h  /Vn Resiz
 fxc.exe /nologo /T cs_5_0 /E Convert /O3 /WX /Fh wcap_convert_shader.h /Vn ConvertShaderBytes /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl
 
 rc.exe /nologo wcap.rc
-cl.exe /nologo /MP *.c /Fewcap.exe wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata
+cl.exe /nologo /W3 /WX /MP *.c /Fewcap.exe wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata
 del *.obj *.res >nul
