@@ -151,8 +151,8 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	ID3D11ComputeShader* ResizeShader;
 	ID3D11ComputeShader* ConvertShader;
-	HR(ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes, sizeof(ResizeShaderBytes), NULL, &ResizeShader));
-	HR(ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &ConvertShader));
+	ID3D11Device_CreateComputeShader(Device, ResizeShaderBytes, sizeof(ResizeShaderBytes), NULL, &ResizeShader);
+	ID3D11Device_CreateComputeShader(Device, ConvertShaderBytes, sizeof(ConvertShaderBytes), NULL, &ConvertShader);
 
 	DWORD InputWidth = Config->Width;
 	DWORD InputHeight = Config->Height;
@@ -450,9 +450,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				.Usage = D3D11_USAGE_DEFAULT,
 				.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
 			};
-			HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->InputTexture));
-			HR(ID3D11Device_CreateRenderTargetView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget));
-			HR(ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView));
+			ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->InputTexture);
+			ID3D11Device_CreateRenderTargetView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->InputRenderTarget);
+			ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->InputTexture, NULL, &Encoder->ResizeInputView);
 
 			FLOAT Black[] = { 0, 0, 0, 0 };
 			ID3D11DeviceContext_ClearRenderTargetView(Context, Encoder->InputRenderTarget, Black);
@@ -479,7 +479,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				.Usage = D3D11_USAGE_DEFAULT,
 				.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE,
 			};
-			HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->ResizedTexture));
+			ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Encoder->ResizedTexture);
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC ResourceView =
 			{
@@ -488,7 +488,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				.Texture2D.MipLevels = 1,
 				.Texture2D.MostDetailedMip = 0,
 			};
-			HR(ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &ResourceView, &Encoder->ConvertInputView));
+			ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &ResourceView, &Encoder->ConvertInputView);
 
 			// because D3D 11.0 does not support B8G8R8A8_UNORM for UAV, create uint UAV used on BGRA texture
 			D3D11_UNORDERED_ACCESS_VIEW_DESC AccessViewDesc =
@@ -497,7 +497,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 				.Texture2D.MipSlice = 0,
 			};
-			HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView));
+			ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView);
 		}
 
 		// NV12 converted texture
@@ -537,9 +537,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				IMFTrackedSample* VideoTracked;
 
 				ID3D11Texture2D* Texture;
-				HR(ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Texture));
-				HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertOutputViewY[i]));
-				HR(ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertOutputViewUV[i]));
+				ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Texture);
+				ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewY,  &Encoder->ConvertOutputViewY[i]);
+				ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Texture, &ViewUV, &Encoder->ConvertOutputViewUV[i]);
 				HR(MFCreateVideoSampleFromSurface(NULL, &VideoSample));
 				HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, 0, FALSE, &Buffer));
 				HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));

@@ -180,7 +180,7 @@ static void ShowFileInFolder(LPCWSTR Filename)
 	if (Filename[0] && SUCCEEDED(SHParseDisplayName(Filename, NULL, &List, 0, &Flags)))
 	{
 		HR(SHOpenFolderAndSelectItems(List, 0, NULL, 0));
-		CoTaskMemFree((LPVOID)List);
+		CoTaskMemFree(List);
 	}
 }
 
@@ -389,6 +389,14 @@ static ID3D11Device* CreateDevice(void)
 	{
 		IDXGIAdapter_Release(Adapter);
 	}
+
+#ifdef _DEBUG
+	ID3D11InfoQueue* Info;
+	HR(ID3D11Device_QueryInterface(Device, &IID_ID3D11InfoQueue, &Info));
+	ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+	ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
+	ID3D11InfoQueue_Release(Info);
+#endif
 
 	return Device;
 }
