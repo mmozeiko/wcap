@@ -184,7 +184,7 @@ static void ShowFileInFolder(LPCWSTR Filename)
 	}
 }
 
-static void StartRecording(ID3D11Device* Device, LPCWSTR Caption)
+static void StartRecording(ID3D11Device* Device)
 {
 	SYSTEMTIME Time;
 	GetLocalTime(&Time);
@@ -255,10 +255,6 @@ static void StartRecording(ID3D11Device* Device, LPCWSTR Caption)
 	}
 	SetTimer(gWindow, WCAP_VIDEO_UPDATE_TIMER, WCAP_VIDEO_UPDATE_INTERVAL, NULL);
 
-	if (gConfig.ShowNotifications)
-	{
-		ShowNotification(Caption, L"Recording Started", NIIF_INFO);
-	}
 	UpdateTrayIcon(gIcon2);
 	gRecordingState = SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 	gRecording = TRUE;
@@ -338,14 +334,7 @@ static void StopRecording(void)
 	SetWindowLongW(gWindow, GWL_EXSTYLE, 0);
 
 	UpdateTrayIcon(gIcon1);
-	if (gConfig.ShowNotifications)
-	{
-		ShowNotification(PathFindFileNameW(gRecordingPath), L"Recording Finished", NIIF_INFO);
-	}
-	else
-	{
-		UpdateTrayTitle(WCAP_TITLE);
-	}
+	UpdateTrayTitle(WCAP_TITLE);
 }
 
 static ID3D11Device* CreateDevice(void)
@@ -448,10 +437,7 @@ static void CaptureWindow(void)
 		return;
 	}
 
-	WCHAR WindowTitle[1024];
-	GetWindowTextW(Window, WindowTitle, _countof(WindowTitle));
-
-	StartRecording(Device, WindowTitle);
+	StartRecording(Device);
 }
 
 static void CaptureMonitor(void)
@@ -478,53 +464,7 @@ static void CaptureMonitor(void)
 		return;
 	}
 
-	MONITORINFOEXW Info = { .cbSize = sizeof(Info) };
-	GetMonitorInfoW(Monitor, (LPMONITORINFO)&Info);
-
-	WCHAR MonitorName[128];
-	MonitorName[0] = 0;
-
-	DISPLAYCONFIG_PATH_INFO DisplayPaths[32];
-	DISPLAYCONFIG_MODE_INFO DisplayModes[32];
-	UINT32 PathCount = _countof(DisplayPaths);
-	UINT32 ModeCount = _countof(DisplayModes);
-
-	// try to get actual monitor name
-	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &PathCount, DisplayPaths, &ModeCount, DisplayModes, NULL) == ERROR_SUCCESS)
-	{
-		for (UINT32 i = 0; i < PathCount; i++)
-		{
-			const DISPLAYCONFIG_PATH_INFO* Path = &DisplayPaths[i];
-
-			DISPLAYCONFIG_SOURCE_DEVICE_NAME SourceName =
-			{
-				.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-				.header.size = sizeof(SourceName),
-				.header.adapterId = Path->sourceInfo.adapterId,
-				.header.id = Path->sourceInfo.id,
-			};
-
-			if (DisplayConfigGetDeviceInfo(&SourceName.header) == ERROR_SUCCESS && StrCmpW(Info.szDevice, SourceName.viewGdiDeviceName) == 0)
-			{
-				DISPLAYCONFIG_TARGET_DEVICE_NAME TargetName =
-				{
-					.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-					.header.size = sizeof(TargetName),
-					.header.adapterId = Path->sourceInfo.adapterId,
-					.header.id = Path->targetInfo.id,
-				};
-
-				if (DisplayConfigGetDeviceInfo(&TargetName.header) == ERROR_SUCCESS)
-				{
-					wsprintfW(MonitorName, L"%s - %s", Info.szDevice, TargetName.monitorFriendlyDeviceName);
-					break;
-				}
-			}
-		}
-	}
-
-	// if cannot get monitor name, just use device name
-	StartRecording(Device, MonitorName[0] ? MonitorName : Info.szDevice);
+	StartRecording(Device);
 }
 
 static void CaptureRectangleInit(void)
@@ -660,10 +600,7 @@ static void CaptureRectangle(void)
 		return;
 	}
 
-	WCHAR Text[128];
-	wsprintfW(Text, L"%d x %d", Rect.right - Rect.left, Rect.bottom - Rect.top);
-
-	StartRecording(Device, Text);
+	StartRecording(Device);
 }
 
 static int GetPointResize(int X, int Y)

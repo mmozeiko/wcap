@@ -14,7 +14,6 @@
 
 typedef struct Config {
 	// capture
-	BOOL ShowNotifications;
 	BOOL MouseCursor;
 	BOOL OnlyClientArea;
 	BOOL CaptureAudio;

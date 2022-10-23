@@ -11,7 +11,6 @@
 #define ID_OK                  IDOK     // 1
 #define ID_CANCEL              IDCANCEL // 2
 #define ID_DEFAULTS            3
-#define ID_SHOW_NOTIFICATIONS  10
 #define ID_MOUSE_CURSOR        20
 #define ID_ONLY_CLIENT_AREA    30
 #define ID_CAPTURE_AUDIO       40
@@ -161,7 +160,6 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	Config__UpdateAudioBitrate(Window, Config->AudioCodec, Config);
 
 	// capture
-	CheckDlgButton(Window, ID_SHOW_NOTIFICATIONS, Config->ShowNotifications);
 	CheckDlgButton(Window, ID_MOUSE_CURSOR,       Config->MouseCursor);
 	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,   Config->OnlyClientArea);
 	CheckDlgButton(Window, ID_CAPTURE_AUDIO,      Config->CaptureAudio);
@@ -325,7 +323,6 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		if (Control == ID_OK)
 		{
 			// capture
-			Config->ShowNotifications = IsDlgButtonChecked(Window, ID_SHOW_NOTIFICATIONS);
 			Config->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
 			Config->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
 			Config->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
@@ -680,7 +677,6 @@ void Config_Defaults(Config* Config)
 	*Config = (struct Config)
 	{
 		// capture
-		.ShowNotifications = TRUE,
 		.MouseCursor = TRUE,
 		.OnlyClientArea = TRUE,
 		.CaptureAudio = TRUE,
@@ -768,7 +764,6 @@ static void Config__GetStr(LPCWSTR FileName, LPCWSTR Key, DWORD* Value, const LP
 void Config_Load(Config* Config, LPCWSTR FileName)
 {
 	// capture
-	Config__GetBool(FileName, L"ShowNotifications",        &Config->ShowNotifications);
 	Config__GetBool(FileName, L"MouseCursor",              &Config->MouseCursor);
 	Config__GetBool(FileName, L"OnlyClientArea",           &Config->OnlyClientArea);
 	Config__GetBool(FileName, L"CaptureAudio",             &Config->CaptureAudio);
@@ -812,7 +807,6 @@ static void Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
 void Config_Save(Config* Config, LPCWSTR FileName)
 {
 	// capture
-	WritePrivateProfileStringW(INI_SECTION, L"ShowNotifications",         Config->ShowNotifications        ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",               Config->MouseCursor              ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",            Config->OnlyClientArea           ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",              Config->CaptureAudio             ? L"1" : L"0", FileName);
@@ -864,7 +858,6 @@ BOOL Config_ShowDialog(Config* Config)
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Show &Notifications", ID_SHOW_NOTIFICATIONS, ITEM_CHECKBOX                     },
 					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       ITEM_CHECKBOX                     },
 					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   ITEM_CHECKBOX                     },
 					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      ITEM_CHECKBOX                     },
