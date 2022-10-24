@@ -12,6 +12,7 @@
 #include <shellapi.h>
 #include <windowsx.h>
 
+#pragma comment (lib, "ntdll.lib")
 #pragma comment (lib, "kernel32.lib")
 #pragma comment (lib, "user32.lib")
 #pragma comment (lib, "gdi32.lib")
@@ -30,6 +31,7 @@
 #pragma comment (lib, "wmcodecdspuuid.lib")
 #pragma comment (lib, "avrt.lib")
 #pragma comment (lib, "uxtheme.lib")
+#pragma comment (lib, "WindowsApp.lib")
 
 // this is needed to be able to use Nvidia Media Foundation encoders on Optimus systems
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;

@@ -1,15 +1,8 @@
 #include "wcap_capture.h"
 #include <dwmapi.h>
+#include <roapi.h>
 
 #define CAPTURE_BUFFER_COUNT 2
-
-typedef struct {
-	DWORD Flags;
-	DWORD Length;
-	DWORD Padding1;
-	DWORD Padding2;
-	LPCWCHAR Ptr;
-} HSTRING;
 
 typedef enum {
 	DQTAT_COM_NONE = 0,
@@ -55,10 +48,6 @@ typedef struct IDirect3DDxgiInterfaceAccess       IDirect3DDxgiInterfaceAccess;
 
 // don't really care about contents of IDispatcherQueueController
 typedef IInspectable IDispatcherQueueController;
-
-struct IInspectableVtbl {
-	IInspectable_Parent(IInspectable);
-};
 
 struct IClosableVtbl {
 	IInspectable_Parent(IClosable);
@@ -134,7 +123,6 @@ struct IDirect3DDxgiInterfaceAccessVtbl {
 
 #define VTBL(name) struct name { const struct name ## Vtbl* vtbl; }
 VTBL(IClosable);
-VTBL(IInspectable);
 VTBL(IGraphicsCaptureSession);
 VTBL(IGraphicsCaptureSession2);
 VTBL(IGraphicsCaptureItemInterop);
@@ -156,11 +144,22 @@ DEFINE_GUID(IID_IDirect3D11CaptureFramePoolStatics, 0x7784056a, 0x67aa, 0x4d53, 
 DEFINE_GUID(IID_IDirect3D11CaptureFramePoolHandler, 0x51a947f7, 0x79cf, 0x5a3e, 0xa3, 0xa5, 0x12, 0x89, 0xcf, 0xa6, 0xdf, 0xe8);
 DEFINE_GUID(IID_IDirect3DDxgiInterfaceAccess,       0xa9b3d012, 0x3df2, 0x4ee3, 0xb8, 0xd1, 0x86, 0x95, 0xf4, 0x57, 0xd3, 0xc1);
 
-#define STATIC_HSTRING(name, str) static HSTRING name = { 1, sizeof(str) - 1, 0, 0, L## str }
-STATIC_HSTRING(GraphicsCaptureSessionName,     "Windows.Graphics.Capture.GraphicsCaptureSession"    );
+typedef struct {
+	DWORD Flags;
+	DWORD Length;
+	DWORD Padding1;
+	DWORD Padding2;
+	LPCWCHAR Ptr;
+} StaticHSTRING;
+
+#define STATIC_HSTRING(name, str) static HSTRING name = (HSTRING)&(StaticHSTRING){ 1, sizeof(str) - 1, 0, 0, L## str }
 STATIC_HSTRING(GraphicsCaptureItemName,        "Windows.Graphics.Capture.GraphicsCaptureItem"       );
 STATIC_HSTRING(Direct3D11CaptureFramePoolName, "Windows.Graphics.Capture.Direct3D11CaptureFramePool");
 #undef STATIC_HSTRING
+
+extern __declspec(dllimport) LONG WINAPI RtlGetVersion(RTL_OSVERSIONINFOW*);
+extern __declspec(dllimport) HRESULT WINAPI CreateDispatcherQueueController(DispatcherQueueOptions, IDispatcherQueueController**);
+extern __declspec(dllimport) HRESULT WINAPI CreateDirect3D11DeviceFromDXGIDevice(IDXGIDevice*, IInspectable**);
 
 static RECT Capture__GetRect(Capture* Capture, LONG Width, LONG Height)
 {
@@ -300,12 +299,6 @@ static const struct ITypedEventHandlerVtbl Capture__FrameHandlerVtbl = {
 
 BOOL Capture_IsSupported(void)
 {
-	HMODULE NtModule = GetModuleHandleW(L"ntdll.dll");
-	Assert(NtModule);
-
-	LONG (WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
-	Assert(RtlGetVersion);
-
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
 	RtlGetVersion(&Version);
 
@@ -315,12 +308,6 @@ BOOL Capture_IsSupported(void)
 
 BOOL Capture_CanHideMouseCursor(void)
 {
-	HMODULE NtModule = GetModuleHandleW(L"ntdll.dll");
-	Assert(NtModule);
-
-	LONG (WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW Version) = (void*)GetProcAddress(NtModule, "RtlGetVersion");
-	Assert(RtlGetVersion);
-
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
 	RtlGetVersion(&Version);
 
@@ -330,28 +317,10 @@ BOOL Capture_CanHideMouseCursor(void)
 
 void Capture_Init(Capture* Capture, CaptureCloseCallback* CloseCallback, CaptureFrameCallback* FrameCallback)
 {
-	// load these entry points dynamically, so we can start .exe on older windows for displaying nicer error message
-	HMODULE CombaseModule = LoadLibraryW(L"combase.dll");
-	HMODULE CoreMessagingModule = LoadLibraryW(L"CoreMessaging.dll");
-	HMODULE Direct3D11Module = GetModuleHandleW(L"d3d11.dll");
-	Assert(CombaseModule);
-	Assert(CoreMessagingModule);
-	Assert(Direct3D11Module);
-
-	HRESULT (WINAPI* RoInitialize)(DWORD) = (void*)GetProcAddress(CombaseModule, "RoInitialize");
-	HRESULT (WINAPI* RoGetActivationFactory)(HSTRING*, const GUID*, void**) = (void*)GetProcAddress(CombaseModule, "RoGetActivationFactory");
-	HRESULT (WINAPI* CreateDispatcherQueueController)(DispatcherQueueOptions, IDispatcherQueueController**) = (void*)GetProcAddress(CoreMessagingModule, "CreateDispatcherQueueController");
-	Capture->CreateDirect3D11DeviceFromDXGIDevice = (void*)GetProcAddress(Direct3D11Module, "CreateDirect3D11DeviceFromDXGIDevice");
-	Assert(RoInitialize);
-	Assert(RoGetActivationFactory);
-	Assert(CreateDispatcherQueueController);
-	Assert(Capture->CreateDirect3D11DeviceFromDXGIDevice);
-
-	const DWORD RO_INIT_SINGLETHREADED = 0;
 	HR(RoInitialize(RO_INIT_SINGLETHREADED));
 
-	HR(RoGetActivationFactory(&GraphicsCaptureItemName, &IID_IGraphicsCaptureItemInterop, (LPVOID*)&Capture->ItemInterop));
-	HR(RoGetActivationFactory(&Direct3D11CaptureFramePoolName, &IID_IDirect3D11CaptureFramePoolStatics, (LPVOID*)&Capture->FramePoolStatics));
+	HR(RoGetActivationFactory(GraphicsCaptureItemName, &IID_IGraphicsCaptureItemInterop, (LPVOID*)&Capture->ItemInterop));
+	HR(RoGetActivationFactory(Direct3D11CaptureFramePoolName, &IID_IDirect3D11CaptureFramePoolStatics, (LPVOID*)&Capture->FramePoolStatics));
 
 	Capture->OnCloseHandler.vtbl = &Capture__CloseHandlerVtbl;
 	Capture->OnFrameHandler.vtbl = &Capture__FrameHandlerVtbl;
@@ -376,7 +345,7 @@ BOOL Capture_CreateForWindow(Capture* Capture, ID3D11Device* Device, HWND Window
 {
 	IDXGIDevice* DxgiDevice;
 	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
-	HR(Capture->CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (LPVOID*)&Capture->Device));
+	HR(CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (IInspectable**)&Capture->Device));
 	IDXGIDevice_Release(DxgiDevice);
 
 	IGraphicsCaptureItem* Item;
@@ -413,7 +382,7 @@ BOOL Capture_CreateForMonitor(Capture* Capture, ID3D11Device* Device, HMONITOR M
 {
 	IDXGIDevice* DxgiDevice;
 	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
-	HR(Capture->CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (LPVOID*)&Capture->Device));
+	HR(CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (IInspectable**)&Capture->Device));
 	IDXGIDevice_Release(DxgiDevice);
 
 	IGraphicsCaptureItem* Item;

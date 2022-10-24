@@ -16,7 +16,6 @@ typedef void CaptureCloseCallback(void);
 typedef void CaptureFrameCallback(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time);
 
 typedef struct Capture {
-	HRESULT (WINAPI* CreateDirect3D11DeviceFromDXGIDevice)(IDXGIDevice*, LPVOID*);
 	IGraphicsCaptureItemInterop* ItemInterop;
 	IDirect3D11CaptureFramePoolStatics* FramePoolStatics;
 	IDirect3DDevice* Device;
