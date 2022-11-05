@@ -1,6 +1,6 @@
 #include "wcap.h"
 #include "wcap_config.h"
-#include "wcap_audio.h"
+#include "wcap_audio_capture.h"
 #include "wcap_capture.h"
 #include "wcap_encoder.h"
 
@@ -71,6 +71,9 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 
 #define WCAP_RECT_BORDER 2
 
+// 1 second, we'll be reading it every 100msec
+#define AUDIO_CAPTURE_BUFFER_DURATION_100NS 10 * 1000 * 1000
+
 // constants
 static WCHAR gConfigPath[MAX_PATH];
 static LARGE_INTEGER gTickFreq;
@@ -108,7 +111,7 @@ static int gRectResize;
 // globals
 static HWND gWindow;
 static Config gConfig;
-static Audio gAudio;
+static AudioCapture gAudio;
 static Capture gCapture;
 static Encoder gEncoder;
 
@@ -225,21 +228,21 @@ static void StartRecording(ID3D11Device* Device)
 
 	if (gConfig.CaptureAudio)
 	{
-		if (!Audio_Start(&gAudio))
+		if (!AudioCapture_Start(&gAudio, AUDIO_CAPTURE_BUFFER_DURATION_100NS))
 		{
 			ShowNotification(L"Cannot capture audio!", L"Cannot Start Recording", NIIF_WARNING);
 			Capture_Stop(&gCapture);
 			ID3D11Device_Release(Device);
 			return;
 		}
-		EncConfig.AudioFormat = gAudio.Format;
+		EncConfig.AudioFormat = gAudio.format;
 	}
 
 	if (!Encoder_Start(&gEncoder, Device, gRecordingPath, &EncConfig))
 	{
 		if (gConfig.CaptureAudio)
 		{
-			Audio_Stop(&gAudio);
+			AudioCapture_Stop(&gAudio);
 		}
 		Capture_Stop(&gCapture);
 		ID3D11Device_Release(Device);
@@ -272,28 +275,26 @@ static void EncodeCapturedAudio(void)
 		return;
 	}
 
-	LPVOID Data;
-	UINT32 FrameCount;
-	UINT64 Time;
-	while (Audio_GetNextBuffer(&gAudio, &Data, &FrameCount, &Time))
+	AudioCaptureData data;
+	while (AudioCapture_GetData(&gAudio, &data))
 	{
-		UINT32 FramesToEncode = FrameCount;
-		if (Time < gEncoder.StartTime)
+		UINT32 FramesToEncode = (UINT32)data.count;
+		if (data.time < gEncoder.StartTime)
 		{
-			const UINT32 SampleRate = gAudio.Format->nSamplesPerSec;
-			const UINT32 BytesPerFrame = gAudio.Format->nBlockAlign;
+			const UINT32 SampleRate = gAudio.format->nSamplesPerSec;
+			const UINT32 BytesPerFrame = gAudio.format->nBlockAlign;
 
 			// figure out how much time (100nsec units) and frame count to skip from current buffer
-			UINT64 TimeToSkip = gEncoder.StartTime - Time;
+			UINT64 TimeToSkip = gEncoder.StartTime - data.time;
 			UINT32 FramesToSkip = (UINT32)((TimeToSkip * SampleRate - 1) / MF_UNITS_PER_SECOND + 1);
 			if (FramesToSkip < FramesToEncode)
 			{
 				// need to skip part of captured data
-				Time += FramesToSkip * MF_UNITS_PER_SECOND / SampleRate;
+				data.time += FramesToSkip * MF_UNITS_PER_SECOND / SampleRate;
 				FramesToEncode -= FramesToSkip;
-				if (Data)
+				if (data.samples)
 				{
-					Data = (BYTE*)Data + FramesToSkip * BytesPerFrame;
+					data.samples = (BYTE*)data.samples + FramesToSkip * BytesPerFrame;
 				}
 			}
 			else
@@ -304,10 +305,10 @@ static void EncodeCapturedAudio(void)
 		}
 		if (FramesToEncode != 0)
 		{
-			Assert(Time >= gEncoder.StartTime);
-			Encoder_NewSamples(&gEncoder, Data, FramesToEncode, Time, gTickFreq.QuadPart);
+			Assert(data.time >= gEncoder.StartTime);
+			Encoder_NewSamples(&gEncoder, data.samples, FramesToEncode, data.time, gTickFreq.QuadPart);
 		}
-		Audio_ReleaseBuffer(&gAudio, FrameCount);
+		AudioCapture_ReleaseData(&gAudio, &data);
 	}
 }
 
@@ -319,9 +320,9 @@ static void StopRecording(void)
 	if (gConfig.CaptureAudio)
 	{
 		KillTimer(gWindow, WCAP_AUDIO_CAPTURE_TIMER);
-		Audio_Flush(&gAudio);
+		AudioCapture_Flush(&gAudio);
 		EncodeCapturedAudio();
-		Audio_Stop(&gAudio);
+		AudioCapture_Stop(&gAudio);
 	}
 	KillTimer(gWindow, WCAP_VIDEO_UPDATE_TIMER);
 
@@ -1264,7 +1265,6 @@ void WinMainCRTStartup()
 
 	Config_Defaults(&gConfig);
 	Config_Load(&gConfig, gConfigPath);
-	Audio_Init(&gAudio);
 	Capture_Init(&gCapture, &OnCaptureClose, &OnCaptureFrame);
 	Encoder_Init(&gEncoder);
 
