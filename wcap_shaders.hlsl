@@ -8,6 +8,12 @@ RWTexture2D<uint> Output : register(u0);
 RWTexture2D<uint>  OutputY  : register(u0);
 RWTexture2D<uint2> OutputUV : register(u1);
 
+// YUV conversion matrix
+cbuffer ConvertBuffer : register(b0)
+{
+	row_major float3x4 ConvertMtx;
+};
+
 float Filter(float x)
 {
 	// https://en.wikipedia.org/wiki/Mitchell%E2%80%93Netravali_filters
@@ -71,18 +77,9 @@ void Resize(uint3 Id: SV_DispatchThreadID)
 	Output[Id.xy] = dot(uint3(clamp(Color.bgr, 0, 1) * 255 + 0.5), uint3(1, 1 << 8, 1 << 16));
 }
 
-// BT.709, limited range, Y=[16..235], UV=[16..240]
-// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-static const float3 ConvertY = float3(  0.2126,  0.7152,  0.0722 );
-static const float3 ConvertU = float3( -0.1146, -0.3854,  0.5    );
-static const float3 ConvertV = float3(  0.5,    -0.4542, -0.0458 );
-
 float3 RgbToYuv(float3 Rgb)
 {
-	float Y = dot(ConvertY.xyz, Rgb) * 219.0 + 16.5;
-	float U = dot(ConvertU.xyz, Rgb) * 224.0 + 128.5;
-	float V = dot(ConvertV.xyz, Rgb) * 224.0 + 128.5;
-	return float3(Y, U, V);
+	return mul(ConvertMtx, float4(Rgb, 1.0));
 }
 
 [numthreads(16, 8, 1)]

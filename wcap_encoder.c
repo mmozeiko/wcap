@@ -236,11 +236,51 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	Encoder->VideoStreamIndex = -1;
 	Encoder->AudioStreamIndex = -1;
 
+	const GUID* Container;
+	const GUID* Codec;
+	UINT32 Profile;
+	const GUID* MediaFormatYUV;
+	DXGI_FORMAT FormatYUV;
+	DXGI_FORMAT FormatY;
+	DXGI_FORMAT FormatUV;
+	if (Config->Config->VideoCodec == CONFIG_VIDEO_H264)
+	{
+		MediaFormatYUV = &MFVideoFormat_NV12;
+		FormatYUV = DXGI_FORMAT_NV12;
+		FormatY = DXGI_FORMAT_R8_UINT;
+		FormatUV = DXGI_FORMAT_R8G8_UINT;
+
+		Container = Config->Config->FragmentedOutput ? &MFTranscodeContainerType_FMPEG4 : &MFTranscodeContainerType_MPEG4;
+		Codec = &MFVideoFormat_H264;
+		Profile = ((UINT32[]) { eAVEncH264VProfile_Base, eAVEncH264VProfile_Main, eAVEncH264VProfile_High })[Config->Config->VideoProfile];
+
+	}
+	else if (Config->Config->VideoCodec == CONFIG_VIDEO_H265 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN)
+	{
+		MediaFormatYUV = &MFVideoFormat_NV12;
+		FormatYUV = DXGI_FORMAT_NV12;
+		FormatY = DXGI_FORMAT_R8_UINT;
+		FormatUV = DXGI_FORMAT_R8G8_UINT;
+
+		Container = &MFTranscodeContainerType_MPEG4;
+		Codec = &MFVideoFormat_HEVC;
+		Profile = eAVEncH265VProfile_Main_420_8;
+
+	}
+	else // Config->Config->VideoCodec == CONFIG_VIDEO_H265 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN_10
+	{
+		MediaFormatYUV = &MFVideoFormat_P010;
+		FormatYUV = DXGI_FORMAT_P010;
+		FormatY = DXGI_FORMAT_R16_UINT;
+		FormatUV = DXGI_FORMAT_R16G16_UINT;
+
+		Container = &MFTranscodeContainerType_MPEG4;
+		Codec = &MFVideoFormat_HEVC;
+		Profile = eAVEncH265VProfile_Main_420_10;
+	}
+
 	// output file
 	{
-		const GUID* Container = Config->Config->FragmentedOutput && Config->Config->VideoCodec == CONFIG_VIDEO_H264
-			? &MFTranscodeContainerType_FMPEG4 : &MFTranscodeContainerType_MPEG4;
-
 		IMFAttributes* Attributes;
 		HR(MFCreateAttributes(&Attributes, 4));
 		HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, Config->Config->HardwareEncoder));
@@ -260,19 +300,6 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	// video output type
 	{
-		const GUID* Codec;
-		UINT32 Profile;
-		if (Config->Config->VideoCodec == CONFIG_VIDEO_H264)
-		{
-			Codec = &MFVideoFormat_H264;
-			Profile = ((UINT32[]){ eAVEncH264VProfile_Base, eAVEncH264VProfile_Main, eAVEncH264VProfile_High })[Config->Config->VideoProfile];
-		}
-		else
-		{
-			Codec = &MFVideoFormat_HEVC;
-			Profile = eAVEncH265VProfile_Main_420_8;
-		}
-
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 
@@ -282,7 +309,6 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -298,17 +324,17 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		}
 	}
 
-	// video input type, NV12 format
+	// video input type, NV12 or P010 format
 	{
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
-		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, &MFVideoFormat_NV12));
+		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, MediaFormatYUV));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
+		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
 
 		hr = IMFSinkWriter_SetInputMediaType(Writer, Encoder->VideoStreamIndex, Type, NULL);
@@ -502,10 +528,10 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 			ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Encoder->ResizedTexture, &AccessViewDesc, &Encoder->ResizeOutputView);
 		}
 
-		// NV12 converted texture
+		// YUV converted texture
 		{
 			UINT32 Size;
-			HR(MFCalculateImageSize(&MFVideoFormat_NV12, OutputWidth, OutputHeight, &Size));
+			HR(MFCalculateImageSize(MediaFormatYUV, OutputWidth, OutputHeight, &Size));
 
 			D3D11_TEXTURE2D_DESC TextureDesc =
 			{
@@ -513,7 +539,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				.Height = OutputHeight,
 				.MipLevels = 1,
 				.ArraySize = 1,
-				.Format = DXGI_FORMAT_NV12,
+				.Format = FormatYUV,
 				.SampleDesc = { 1, 0 },
 				.Usage = D3D11_USAGE_DEFAULT,
 				.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
@@ -521,13 +547,13 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 			D3D11_UNORDERED_ACCESS_VIEW_DESC ViewY =
 			{
-				.Format = DXGI_FORMAT_R8_UINT,
+				.Format = FormatY,
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			};
 
 			D3D11_UNORDERED_ACCESS_VIEW_DESC ViewUV =
 			{
-				.Format = DXGI_FORMAT_R8G8_UINT,
+				.Format = FormatUV,
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			};
 
@@ -603,6 +629,52 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Encoder->AudioCount = ENCODER_AUDIO_BUFFER_COUNT;
 	}
 
+	// constant buffer for RGB to YUV conversion
+	{
+		float RangeY, OffsetY;
+		float RangeUV, OffsetUV;
+
+		if (FormatYUV == DXGI_FORMAT_NV12)
+		{
+			// Y=[16..235], UV=[16..240]
+			RangeY = 219.f;
+			OffsetY = 16.5f;
+			RangeUV = 224.f;
+			OffsetUV = 128.5f;
+		}
+		else // FormatYUV == DXGI_FORMAT_P010
+		{
+			// Y=[64..940], UV=[64..960]
+			// mutiplied by 64, because 10-bit values are positioned at top of 16-bit used for texture storage format
+			RangeY = 876.f * 64.f;
+			OffsetY = 64.5f * 64.f;
+			RangeUV = 896.f * 64.f;
+			OffsetUV = 512.5f * 64.f;
+		}
+
+		// BT.709 - https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
+		float ConvertMtx[3][4] =
+		{
+			{  0.2126f * RangeY,   0.7152f * RangeY,   0.0722f * RangeY,  OffsetY  },
+			{ -0.1146f * RangeUV, -0.3854f * RangeUV,  0.5f    * RangeUV, OffsetUV },
+			{  0.5f    * RangeUV, -0.4542f * RangeUV, -0.0458f * RangeUV, OffsetUV },
+		};
+
+		D3D11_BUFFER_DESC Desc =
+		{
+			.ByteWidth = sizeof(ConvertMtx),
+			.Usage = D3D11_USAGE_IMMUTABLE,
+			.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
+		};
+
+		D3D11_SUBRESOURCE_DATA Data =
+		{
+			.pSysMem = ConvertMtx,
+		};
+
+		ID3D11Device_CreateBuffer(Device, &Desc, &Data, &Encoder->ConvertBuffer);
+	}
+
 	ID3D11Device_AddRef(Device);
 	ID3D11DeviceContext_AddRef(Context);
 	ID3D11ComputeShader_AddRef(ResizeShader);
@@ -628,8 +700,8 @@ bail:
 		IMFSinkWriter_Release(Writer);
 		DeleteFileW(FileName);
 	}
-	ID3D11ComputeShader_Release(ResizeShader);
 	ID3D11ComputeShader_Release(ConvertShader);
+	ID3D11ComputeShader_Release(ResizeShader);
 	ID3D11DeviceContext_Release(Context);
 	IMFDXGIDeviceManager_Release(Manager);
 
@@ -678,6 +750,7 @@ void Encoder_Stop(Encoder* Encoder)
 	ID3D11ShaderResourceView_Release(Encoder->ResizeInputView);
 	ID3D11Texture2D_Release(Encoder->InputTexture);
 
+	ID3D11Buffer_Release(Encoder->ConvertBuffer);
 	ID3D11ComputeShader_Release(Encoder->ResizeShader);
 	ID3D11ComputeShader_Release(Encoder->ConvertShader);
 	ID3D11DeviceContext_Release(Encoder->Context);
@@ -702,6 +775,8 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 
 	IMFSample* Sample = Encoder->VideoSample[Index];
 
+	ID3D11DeviceContext* Context = Encoder->Context;
+
 	// copy to input texture
 	{
 		D3D11_BOX Box =
@@ -719,37 +794,39 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		if (Width < Encoder->InputWidth || Height < Encoder->InputHeight)
 		{
 			FLOAT Black[] = { 0, 0, 0, 0 };
-			ID3D11DeviceContext_ClearRenderTargetView(Encoder->Context, Encoder->InputRenderTarget, Black);
+			ID3D11DeviceContext_ClearRenderTargetView(Context, Encoder->InputRenderTarget, Black);
 
 			Box.right = Box.left + min(Encoder->InputWidth, Box.right);
 			Box.bottom = Box.top + min(Encoder->InputHeight, Box.bottom);
 		}
-		ID3D11DeviceContext_CopySubresourceRegion(Encoder->Context, (ID3D11Resource*)Encoder->InputTexture, 0, 0, 0, 0, (ID3D11Resource*)Texture, 0, &Box);
+		ID3D11DeviceContext_CopySubresourceRegion(Context, (ID3D11Resource*)Encoder->InputTexture, 0, 0, 0, 0, (ID3D11Resource*)Texture, 0, &Box);
 	}
 
 	// resize if needed
 	if (Encoder->ResizedTexture != NULL)
 	{
-		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ResizeShader, NULL, 0);
-
-		// must bind input first, because otherwise ConvertInputView on input will reference same texture as ResizeOutputView on output rfrom previous frame
-		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ResizeInputView);
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, 1, &Encoder->ResizeOutputView, NULL);
-
-		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 7) / 8, 1);
+		ID3D11DeviceContext_ClearState(Context);
+		// input
+		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Encoder->ResizeInputView);
+		// output
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Encoder->ResizeOutputView, NULL);
+		// shader
+		ID3D11DeviceContext_CSSetShader(Context, Encoder->ResizeShader, NULL, 0);
+		ID3D11DeviceContext_Dispatch(Context, (Encoder->OutputWidth + 15) / 16, (Encoder->OutputHeight + 7) / 8, 1);
 	}
 
 	// convert to YUV
 	{
+		ID3D11DeviceContext_ClearState(Context);
+		// input
+		ID3D11DeviceContext_CSSetConstantBuffers(Context, 0, 1, &Encoder->ConvertBuffer);
+		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Encoder->ConvertInputView);
+		// output
 		ID3D11UnorderedAccessView* Views[] = { Encoder->ConvertOutputViewY[Index], Encoder->ConvertOutputViewUV[Index] };
-
-		ID3D11DeviceContext_CSSetShader(Encoder->Context, Encoder->ConvertShader, NULL, 0);
-
-		// must bind output first, because otherwise ConvertInputView on input will reference same texture as ResizeOutputView on output from resize shader above
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Encoder->Context, 0, _countof(Views), Views, NULL);
-		ID3D11DeviceContext_CSSetShaderResources(Encoder->Context, 0, 1, &Encoder->ConvertInputView);
-
-		ID3D11DeviceContext_Dispatch(Encoder->Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 7) / 8, 1);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, _countof(Views), Views, NULL);
+		// shader
+		ID3D11DeviceContext_CSSetShader(Context, Encoder->ConvertShader, NULL, 0);
+		ID3D11DeviceContext_Dispatch(Context, (Encoder->OutputWidth / 2 + 15) / 16, (Encoder->OutputHeight / 2 + 7) / 8, 1);
 	}
 
 	// setup input time & duration
@@ -773,13 +850,13 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 
 	IMFTrackedSample* Tracked;
 	HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
-	HR(IMFTrackedSample_SetAllocator(Tracked, &Encoder->VideoSampleCallback, NULL));
+	IMFTrackedSample_SetAllocator(Tracked, &Encoder->VideoSampleCallback, NULL);
+	IMFTrackedSample_Release(Tracked);
 
 	// submit to encoder which will happen in background
 	HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->VideoStreamIndex, Sample));
 
 	IMFSample_Release(Sample);
-	IMFTrackedSample_Release(Tracked);
 
 	return TRUE;
 }

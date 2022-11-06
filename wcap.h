@@ -1,5 +1,6 @@
 #pragma once
 
+#define UNICODE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <initguid.h>

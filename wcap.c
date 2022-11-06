@@ -381,7 +381,7 @@ static ID3D11Device* CreateDevice(void)
 	{
 		IDXGIAdapter_Release(Adapter);
 	}
-
+		
 #ifdef _DEBUG
 	ID3D11InfoQueue* Info;
 	HR(ID3D11Device_QueryInterface(Device, &IID_ID3D11InfoQueue, &Info));
@@ -1270,13 +1270,13 @@ void WinMainCRTStartup()
 
 	QueryPerformanceFrequency(&gTickFreq);
 
-	gCursorArrow = LoadCursorA(NULL, IDC_ARROW);
-	gCursorResize[WCAP_RESIZE_NONE] = LoadCursorA(NULL, IDC_CROSS);
-	gCursorResize[WCAP_RESIZE_M]    = LoadCursorA(NULL, IDC_SIZEALL);
-	gCursorResize[WCAP_RESIZE_T]    = gCursorResize[WCAP_RESIZE_B]  = LoadCursorA(NULL, IDC_SIZENS);
-	gCursorResize[WCAP_RESIZE_L]    = gCursorResize[WCAP_RESIZE_R]  = LoadCursorA(NULL, IDC_SIZEWE);
-	gCursorResize[WCAP_RESIZE_TL]   = gCursorResize[WCAP_RESIZE_BR] = LoadCursorA(NULL, IDC_SIZENWSE);
-	gCursorResize[WCAP_RESIZE_TR]   = gCursorResize[WCAP_RESIZE_BL] = LoadCursorA(NULL, IDC_SIZENESW);
+	gCursorArrow = LoadCursor(NULL, IDC_ARROW);
+	gCursorResize[WCAP_RESIZE_NONE] = LoadCursor(NULL, IDC_CROSS);
+	gCursorResize[WCAP_RESIZE_M]    = LoadCursor(NULL, IDC_SIZEALL);
+	gCursorResize[WCAP_RESIZE_T]    = gCursorResize[WCAP_RESIZE_B]  = LoadCursor(NULL, IDC_SIZENS);
+	gCursorResize[WCAP_RESIZE_L]    = gCursorResize[WCAP_RESIZE_R]  = LoadCursor(NULL, IDC_SIZEWE);
+	gCursorResize[WCAP_RESIZE_TL]   = gCursorResize[WCAP_RESIZE_BR] = LoadCursor(NULL, IDC_SIZENWSE);
+	gCursorResize[WCAP_RESIZE_TR]   = gCursorResize[WCAP_RESIZE_BL] = LoadCursor(NULL, IDC_SIZENESW);
 
 	gFont = CreateFontW(-WCAP_UI_FONT_SIZE, 0, 0, 0, FW_NORMAL,
 		FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
