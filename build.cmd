@@ -21,7 +21,7 @@ if "%1" equ "debug" (
   set LINK=/DEBUG libucrtd.lib libvcruntimed.lib
 ) else (
   set CL=/GL /O1 /DNDEBUG /GS-
-  set LINK=/LTCG /OPT:REF /OPT:ICF libvcruntime.lib
+  set LINK=/LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
 )
 
 fxc.exe /nologo /T cs_5_0 /E Resize  /O3 /WX /Fh wcap_resize_shader.h  /Vn ResizeShaderBytes  /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl

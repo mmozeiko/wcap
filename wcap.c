@@ -195,7 +195,7 @@ static void StartRecording(ID3D11Device* Device)
 	GetLocalTime(&Time);
 
 	WCHAR Filename[256];
-	wsprintfW(Filename, L"%04u%02u%02u_%02u%02u%02u.mp4", Time.wYear, Time.wMonth, Time.wDay, Time.wHour, Time.wMinute, Time.wSecond);
+	StrFormat(Filename, L"%04u%02u%02u_%02u%02u%02u.mp4", Time.wYear, Time.wMonth, Time.wDay, Time.wHour, Time.wMinute, Time.wSecond);
 
 	StrCpyW(gRecordingPath, gConfig.OutputFolder);
 	PathAppendW(gRecordingPath, Filename);
@@ -991,9 +991,6 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 			DWORD Bitrate, LengthMsec;
 			Encoder_GetStats(&gEncoder, &Bitrate, &LengthMsec, &FileSize);
 
-			// wsprintfW cannot do floats, so we multiply by 100 to have 2 digits after decimal point
-			DWORD Framerate = MUL_DIV_ROUND_UP(100, gEncoder.FramerateNum, gEncoder.FramerateDen);
-
 			WCHAR LengthText[128];
 			StrFromTimeIntervalW(LengthText, _countof(LengthText), LengthMsec, 6);
 
@@ -1001,8 +998,9 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 			StrFormatByteSizeW(FileSize, SizeText, _countof(SizeText));
 
 			WCHAR Text[1024];
-			wsprintfW(Text, L"Recording: %dx%d @ %d.%02d\nLength: %s\nBitrate: %u kbit/s\nSize: %s\nFramedrop: %u",
-				gEncoder.OutputWidth, gEncoder.OutputHeight, Framerate / 100, Framerate % 100,
+			StrFormat(Text, L"Recording: %dx%d @ %.2f\nLength: %ls\nBitrate: %u kbit/s\nSize: %ls\nFramedrop: %u",
+				gEncoder.OutputWidth, gEncoder.OutputHeight,
+				(float)gEncoder.FramerateNum / (float)gEncoder.FramerateDen,
 				LengthText,
 				Bitrate,
 				SizeText,
@@ -1067,7 +1065,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 					FrameRect(Context, &Rect, GetStockObject(WHITE_BRUSH));
 
 					WCHAR Text[128];
-					int TextLength = wsprintfW(Text, L"%d x %d", X1 - X0, Y1 - Y0);
+					int TextLength = StrFormat(Text, L"%d x %d", X1 - X0, Y1 - Y0);
 
 					SelectObject(Context, gFontBold);
 					SetTextAlign(Context, TA_TOP | TA_RIGHT);

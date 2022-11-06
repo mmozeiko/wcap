@@ -148,12 +148,12 @@ static void Config__UpdateAudioBitrate(HWND Window, DWORD Codec, DWORD AudioBitr
 		for (const DWORD* Bitrate = gAudioBitrates; *Bitrate; Bitrate++)
 		{
 			WCHAR Text[64];
-			wsprintfW(Text, L"%u", *Bitrate);
+			StrFormat(Text, L"%u", *Bitrate);
 			ComboBox_AddString(Control, Text);
 		}
 
 		WCHAR Text[64];
-		wsprintfW(Text, L"%u", AudioBitrate);
+		StrFormat(Text, L"%u", AudioBitrate);
 		ComboBox_SelectString(Control, -1, Text);
 
 	}
@@ -184,7 +184,7 @@ static void Config__FormatKey(DWORD KeyMod, WCHAR* Text)
 	UINT ScanCode = MapVirtualKeyW(HOT_GET_KEY(KeyMod), MAPVK_VK_TO_VSC);
 	if (GetKeyNameTextW(ScanCode << 16, KeyText, _countof(KeyText)) == 0)
 	{
-		wsprintfW(KeyText, L"[0x%02x]", HOT_GET_KEY(KeyMod));
+		StrFormat(KeyText, L"[0x%02x]", HOT_GET_KEY(KeyMod));
 	}
 
 	StrCatW(Text, KeyText);
@@ -223,12 +223,12 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_SETCURSEL, Config->AudioCodec, 0);
 	SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_SETCURSEL, Config->AudioChannels - 1, 0);
 	WCHAR Text[64];
-	wsprintfW(Text, L"%u", Config->AudioSamplerate);
+	StrFormat(Text, L"%u", Config->AudioSamplerate);
 	SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_SELECTSTRING, -1, (LPARAM)Text);
 
 	if (Config->AudioCodec == CONFIG_AUDIO_AAC)
 	{
-		wsprintfW(Text, L"%u", Config->AudioBitrate);
+		StrFormat(Text, L"%u", Config->AudioBitrate);
 		SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_SELECTSTRING, -1, (LPARAM)Text);
 	}
 	else if (Config->AudioCodec == CONFIG_AUDIO_FLAC)
@@ -843,7 +843,7 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 static void Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
 {
 	WCHAR Text[64];
-	wsprintfW(Text, L"%u", Value);
+	StrFormat(Text, L"%u", Value);
 	WritePrivateProfileStringW(INI_SECTION, Key, Text, FileName);
 }
 

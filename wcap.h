@@ -3,6 +3,8 @@
 #define UNICODE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
+#define _CRT_SECURE_NO_DEPRECATE
+
 #include <initguid.h>
 #include <windows.h>
 #include <intrin.h>
@@ -22,3 +24,6 @@
 
 // MF works with 100nsec units
 #define MF_UNITS_PER_SECOND 10000000ULL
+
+#include <stdio.h>
+#define StrFormat(Buffer, ...) _snwprintf(Buffer, _countof(Buffer), __VA_ARGS__)
