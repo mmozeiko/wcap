@@ -43,22 +43,20 @@ typedef struct Encoder {
 	ID3D11UnorderedAccessView* ConvertOutputViewY[ENCODER_VIDEO_BUFFER_COUNT];
 	ID3D11UnorderedAccessView* ConvertOutputViewUV[ENCODER_VIDEO_BUFFER_COUNT];
 	IMFSample*                 VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
-	IMFTrackedSample*          VideoTracked[ENCODER_VIDEO_BUFFER_COUNT];
 
-	BOOL          VideoDiscontinuity;
-	UINT64        VideoLastTime;
-	DWORD         VideoIndex; // next index to use
-	volatile LONG VideoCount; // how many samples are currently available to use
+	BOOL   VideoDiscontinuity;
+	UINT64 VideoLastTime;
+	DWORD  VideoIndex; // next index to use
+	LONG   VideoCount; // how many samples are currently available to use
 
-	IMFTransform* Resampler;
-	IMFSample* AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
-	IMFTrackedSample* AudioTracked[ENCODER_AUDIO_BUFFER_COUNT];
-	IMFSample* AudioInputSample;
+	IMFTransform*   Resampler;
+	IMFSample*      AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
+	IMFSample*      AudioInputSample;
 	IMFMediaBuffer* AudioInputBuffer;
-	HANDLE AudioSemaphore;
-	DWORD AudioFrameSize;
-	DWORD AudioSampleRate;
-	DWORD AudioIndex; // next index to use
+	DWORD           AudioFrameSize;
+	DWORD           AudioSampleRate;
+	DWORD           AudioIndex; // next index to use
+	LONG            AudioCount; // how many samples are currently available to use
 
 } Encoder;
 

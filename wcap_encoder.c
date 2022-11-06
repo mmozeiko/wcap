@@ -45,15 +45,12 @@ static HRESULT STDMETHODCALLTYPE Encoder__GetParameters(IMFAsyncCallback* this, 
 static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IMFAsyncResult* Result)
 {
 	IUnknown* Object;
-	IMFSample* VideoSample;
-	IMFTrackedSample* VideoTracked;
+	IMFSample* Sample;
 
 	HR(IMFAsyncResult_GetObject(Result, &Object));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&VideoSample));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFTrackedSample, (LPVOID*)&VideoTracked));
-
+	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample));
 	IUnknown_Release(Object);
-	// keep Sample & Tracked object reference count incremented to reuse for new frame submission
+	// keep Sample object reference count incremented to reuse for new frame submission
 
 	Encoder* Encoder = CONTAINING_RECORD(this, struct Encoder, VideoSampleCallback);
 	InterlockedIncrement(&Encoder->VideoCount);
@@ -64,18 +61,16 @@ static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IM
 static HRESULT STDMETHODCALLTYPE Encoder__AudioInvoke(IMFAsyncCallback* this, IMFAsyncResult* Result)
 {
 	IUnknown* Object;
-	IMFSample* AudioSample;
-	IMFTrackedSample* AudioTracked;
+	IMFSample* Sample;
 
 	HR(IMFAsyncResult_GetObject(Result, &Object));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&AudioSample));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFTrackedSample, (LPVOID*)&AudioTracked));
-
+	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample));
 	IUnknown_Release(Object);
-	// keep Sample & Tracked object reference count incremented to reuse for new sample submission
+	// keep Sample object reference count incremented to reuse for new sample submission
 
 	Encoder* Encoder = CONTAINING_RECORD(this, struct Encoder, AudioSampleCallback);
-	ReleaseSemaphore(Encoder->AudioSemaphore, 1, NULL);
+	InterlockedIncrement(&Encoder->AudioCount);
+	WakeByAddressSingle(&Encoder->AudioCount);
 
 	return S_OK;
 }
@@ -103,28 +98,35 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 	for (;;)
 	{
 		// we don't want to drop any audio frames, so wait for available sample/buffer
-		DWORD Wait = WaitForSingleObject(Encoder->AudioSemaphore, INFINITE);
-		Assert(Wait == WAIT_OBJECT_0);
+		LONG Count = Encoder->AudioCount;
+		while (Count == 0)
+		{
+			LONG Zero = 0;
+			WaitOnAddress(&Encoder->AudioCount, &Zero, sizeof(LONG), INFINITE);
+			Count = Encoder->AudioCount;
+		}
 
 		DWORD Index = Encoder->AudioIndex;
 
 		IMFSample* Sample = Encoder->AudioSample[Index];
-		IMFTrackedSample* Tracked = Encoder->AudioTracked[Index];
 
 		DWORD Status;
 		MFT_OUTPUT_DATA_BUFFER Output = { .dwStreamID = 0, .pSample = Sample };
 		HRESULT hr = IMFTransform_ProcessOutput(Encoder->Resampler, 0, 1, &Output, &Status);
 		if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
 		{
-			// no output is available, can reuse same sample/buffer next time
-			ReleaseSemaphore(Encoder->AudioSemaphore, 1, NULL);
+			// no output is available
 			break;
 		}
 		Assert(SUCCEEDED(hr));
 
 		Encoder->AudioIndex = (Index + 1) % ENCODER_AUDIO_BUFFER_COUNT;
+		InterlockedDecrement(&Encoder->AudioCount);
 
+		IMFTrackedSample* Tracked;
+		HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
 		HR(IMFTrackedSample_SetAllocator(Tracked, &Encoder->AudioSampleCallback, (IUnknown*)Tracked));
+
 		HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->AudioStreamIndex, Sample));
 
 		IMFSample_Release(Sample);
@@ -534,7 +536,6 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 			{
 				IMFSample* VideoSample;
 				IMFMediaBuffer* Buffer;
-				IMFTrackedSample* VideoTracked;
 
 				ID3D11Texture2D* Texture;
 				ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Texture);
@@ -544,12 +545,10 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 				HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)Texture, 0, FALSE, &Buffer));
 				HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
 				HR(IMFSample_AddBuffer(VideoSample, Buffer));
-				HR(IMFSample_QueryInterface(VideoSample, &IID_IMFTrackedSample, (LPVOID*)&VideoTracked));
 				IMFMediaBuffer_Release(Buffer);
 
 				Encoder->ConvertTexture[i] = Texture;
 				Encoder->VideoSample[i] = VideoSample;
-				Encoder->VideoTracked[i] = VideoTracked;
 			}
 		}
 
@@ -592,18 +591,16 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 			HR(MFCreateMemoryBuffer(Config->Config->AudioSamplerate * Config->Config->AudioChannels * sizeof(short), &Buffer));
 			HR(IMFSample_AddBuffer(Sample, Buffer));
 			IMFMediaBuffer_Release(Buffer);
+			IMFTrackedSample_Release(Tracked);
 
 			Encoder->AudioSample[i] = Sample;
-			Encoder->AudioTracked[i] = Tracked;
 		}
-
-		Encoder->AudioSemaphore = CreateSemaphoreW(NULL, ENCODER_AUDIO_BUFFER_COUNT, ENCODER_AUDIO_BUFFER_COUNT, NULL);
-		Assert(Encoder->AudioSemaphore);
 
 		Encoder->AudioFrameSize = Config->AudioFormat->nBlockAlign;
 		Encoder->AudioSampleRate = Config->AudioFormat->nSamplesPerSec;
 		Encoder->Resampler = Resampler;
 		Encoder->AudioIndex = 0;
+		Encoder->AudioCount = ENCODER_AUDIO_BUFFER_COUNT;
 	}
 
 	ID3D11Device_AddRef(Device);
@@ -656,11 +653,9 @@ void Encoder_Stop(Encoder* Encoder)
 		for (int i = 0; i < ENCODER_AUDIO_BUFFER_COUNT; i++)
 		{
 			IMFSample_Release(Encoder->AudioSample[i]);
-			IMFTrackedSample_Release(Encoder->AudioTracked[i]);
 		}
 		IMFSample_Release(Encoder->AudioInputSample);
 		IMFMediaBuffer_Release(Encoder->AudioInputBuffer);
-		CloseHandle(Encoder->AudioSemaphore);
 	}
 
 	for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
@@ -669,7 +664,6 @@ void Encoder_Stop(Encoder* Encoder)
 		ID3D11UnorderedAccessView_Release(Encoder->ConvertOutputViewUV[i]);
 		ID3D11Texture2D_Release(Encoder->ConvertTexture[i]);
 		IMFSample_Release(Encoder->VideoSample[i]);
-		IMFTrackedSample_Release(Encoder->VideoTracked[i]);
 	}
 
     ID3D11ShaderResourceView_Release(Encoder->ConvertInputView);
@@ -706,8 +700,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	Encoder->VideoIndex = (Index + 1) % ENCODER_VIDEO_BUFFER_COUNT;
 	InterlockedDecrement(&Encoder->VideoCount);
 
-	IMFSample* VideoSample = Encoder->VideoSample[Index];
-	IMFTrackedSample* VideoTracked = Encoder->VideoTracked[Index];
+	IMFSample* Sample = Encoder->VideoSample[Index];
 
 	// copy to input texture
 	{
@@ -764,25 +757,29 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	{
 		Encoder->StartTime = Time;
 	}
-	HR(IMFSample_SetSampleDuration(VideoSample, MFllMulDiv(Encoder->FramerateDen, MF_UNITS_PER_SECOND, Encoder->FramerateNum, 0)));
-	HR(IMFSample_SetSampleTime(VideoSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
+	HR(IMFSample_SetSampleDuration(Sample, MFllMulDiv(Encoder->FramerateDen, MF_UNITS_PER_SECOND, Encoder->FramerateNum, 0)));
+	HR(IMFSample_SetSampleTime(Sample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
 	if (Encoder->VideoDiscontinuity)
 	{
-		HR(IMFSample_SetUINT32(VideoSample, &MFSampleExtension_Discontinuity, TRUE));
+		HR(IMFSample_SetUINT32(Sample, &MFSampleExtension_Discontinuity, TRUE));
 		Encoder->VideoDiscontinuity = FALSE;
 	}
 	else
 	{
 		// don't care about success or no, we just don't want this attribute set at all
-		IMFSample_DeleteItem(VideoSample, &MFSampleExtension_Discontinuity);
+		IMFSample_DeleteItem(Sample, &MFSampleExtension_Discontinuity);
 	}
 
+	IMFTrackedSample* Tracked;
+	HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
+	HR(IMFTrackedSample_SetAllocator(Tracked, &Encoder->VideoSampleCallback, NULL));
+
 	// submit to encoder which will happen in background
-	HR(IMFTrackedSample_SetAllocator(VideoTracked, &Encoder->VideoSampleCallback, NULL));
-	HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->VideoStreamIndex, VideoSample));
-	IMFSample_Release(VideoSample);
-	IMFTrackedSample_Release(VideoTracked);
+	HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->VideoStreamIndex, Sample));
+
+	IMFSample_Release(Sample);
+	IMFTrackedSample_Release(Tracked);
 
 	return TRUE;
 }
