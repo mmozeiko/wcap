@@ -13,7 +13,7 @@ Features
  * press <kbd>Ctrl + Shift + PrintScreen</kbd> to select & record fixed position area on current monitor
  * press any of previous combinations to stop recording
  * right or double-click on tray icon to change settings
- * video encoded using [H264/AVC][] or [H265/HEVC][]
+ * video encoded using [H264/AVC][] or [H265/HEVC][], with 10-bit support for HEVC
  * audio encoded using [AAC][] or [FLAC][]
  * for window capture can capture full window area (including title bar/borders) or just the client area
  * optionally exclude mouse cursor from capture
@@ -25,17 +25,21 @@ Details
 
 wcap uses [Windows.Graphics.Capture][wgc] API available since **Windows 10 version 1903, May 2019 Update (19H1)** to capture
 contents of window or whole monitor. Captured texture is submitted to Media Foundation to encode video to mp4 file with
-hardware accelerated H264 codec. Using capture from compositor and hardware accelerated encoder allows it to consume very
+hardware accelerated codec. Using capture from compositor and hardware accelerated encoder allows it to consume very
 little CPU and memory.
 
 You can choose in settings to capture only client area or full size of window - client area will not include title bar and
 borders for standard windows style. Recorded video size is determined by initial window size.
 
-Video is encoded with H264 or H265 codec using Media Foundation API. Make sure your GPU drivers are updated if something is
-not working with hardware video encoding - by default hardware encoder is preferred, but you can disable it in settings -
-then video will be encoded using [Microsoft Media Foundation H264][MSMFH264] software encoder. It will be also automatically
-used in case GPU/driver does not provide hardware accelerated encoder. You might want to explicitly use software encoder on
-older GPU's as their hardware encoder quality is not so great. 
+Make sure your GPU drivers are updated if something is not working with hardware video encoding - by default hardware encoder
+is enabled, you can disable it in settings - then video will be encoded using [Microsoft Media Foundation H264][MSMFH264]
+software encoder. You might want to explicitly use software encoder on older GPU's as their hardware encoder quality is not great. 
+
+H265 encoding might require installing HEVC package from Microsoft Store - copy following link into Explorer address bar,
+or in Start->Run dialog:
+```
+windows-store://pdp/?ProductId=9n4wgh0z6vhq
+```
 
 Audio is captured using [WASAPI loopback recording][] and encoded using [Microsoft Media Foundation AAC][MSMFAAC] encoder, or
 undocumented Media Foundation FLAC encoder (it seems it always is present in Windows 10).
@@ -71,16 +75,18 @@ different dither methods.
 Building
 ========
 
-To build the binary from source code, have [Visual Studio 2019][VS2019] installed, and simply run `build.cmd`.
-
-Future plans
-============
-
- * Maybe automatically handle default audio device changes when recording audio?
- * Maybe allow to capture & encode 10-bit pixel format when possible
+To build the binary from source code, have [Visual Studio][VS] installed, and simply run `build.cmd`.
 
 Changelog
 =========
+
+##### 2022.11.06
+ * remove notifications on start & stop of capture
+ * remove Windows 10 version check on startup, code always assumes Windows 10
+ * support for 10-bit HEVC encoding
+
+<details><summary>older entries</summary>
+<p>
 
 ##### 2021.12.21
  * allow to choose integrated vs discrete GPU to use for encoding
@@ -124,6 +130,9 @@ Changelog
 ##### 2021.09.19
  * initial release
 
+</p>
+</details>
+
 License
 =======
 
@@ -135,7 +144,7 @@ a compiled binary, for any purpose, commercial or non-commercial, and by any mea
 [wcap.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap.exe
 [wgc]: https://blogs.windows.com/windowsdeveloper/2019/09/16/new-ways-to-do-screen-capture/
 [MSMFH264]: https://docs.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder
-[VS2019]: https://visualstudio.microsoft.com/vs/
+[VS]: https://visualstudio.microsoft.com/vs/
 [WASAPI loopback recording]: https://docs.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording
 [MSMFAAC]: https://docs.microsoft.com/en-us/windows/win32/medfound/aac-encoder
 [ffmpeg]: https://ffmpeg.org/
