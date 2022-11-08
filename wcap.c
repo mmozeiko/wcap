@@ -1233,7 +1233,11 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 	}
 }
 
+#ifndef NDEBUG
+int WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR cmdline, int cmdshow)
+#else
 void WinMainCRTStartup()
+#endif
 {
 	WNDCLASSEXW WindowClass =
 	{
