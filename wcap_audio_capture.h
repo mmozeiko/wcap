@@ -12,12 +12,17 @@ typedef struct {
 	IAudioClient* captureClient;
 	IAudioCaptureClient* capture;
 	WAVEFORMATEX* format;
+	uint64_t startQpc;
+	uint64_t startPos;
+	uint64_t freq;
+	bool useDeviceTimestamp;
+	bool firstTime;
 } AudioCapture;
 
 typedef struct {
 	void* samples;
 	size_t count;
-	uint64_t time;
+	uint64_t time; // compatible with QPC 
 } AudioCaptureData;
 
 // make sure CoInitializeEx has been called before calling Start()
@@ -25,12 +30,14 @@ static bool AudioCapture_Start(AudioCapture* capture, uint64_t duration_100ns);
 static void AudioCapture_Stop(AudioCapture* capture);
 static void AudioCapture_Flush(AudioCapture* capture);
 
-static bool AudioCapture_GetData(AudioCapture* capture, AudioCaptureData* data);
+// expectedTimestamp is used only first time GetData() is called to detect abnormal device timestamps
+static bool AudioCapture_GetData(AudioCapture* capture, AudioCaptureData* data, uint64_t expectedTimestamp);
 static void AudioCapture_ReleaseData(AudioCapture* capture, AudioCaptureData* data);
 
 // implementation
 
 #include <mmdeviceapi.h>
+#include <mfapi.h>
 
 bool AudioCapture_Start(AudioCapture* capture, uint64_t duration_100ns)
 {
@@ -87,8 +94,20 @@ bool AudioCapture_Start(AudioCapture* capture, uint64_t duration_100ns)
 			HR(IAudioClient_GetService(client, &IID_IAudioCaptureClient, (LPVOID*)&capture->capture));
 
 			HR(IAudioClient_Start(client));
+
+			LARGE_INTEGER start;
+			QueryPerformanceCounter(&start);
+			capture->startQpc = start.QuadPart;
+
+			LARGE_INTEGER freq;
+			QueryPerformanceFrequency(&freq);
+			capture->freq = freq.QuadPart;
+
 			capture->captureClient = client;
 			capture->format = format;
+			capture->startPos = 0;
+			capture->useDeviceTimestamp = true;
+			capture->firstTime = true;
 		}
 
 		result = true;
@@ -115,7 +134,7 @@ void AudioCapture_Flush(AudioCapture* capture)
 	HR(IAudioClient_Stop(capture->captureClient));
 }
 
-bool AudioCapture_GetData(AudioCapture* capture, AudioCaptureData* data)
+bool AudioCapture_GetData(AudioCapture* capture, AudioCaptureData* data, uint64_t expectedTimestamp)
 {
 	UINT32 frames;
 	if (FAILED(IAudioCaptureClient_GetNextPacketSize(capture->capture, &frames)) || frames == 0)
@@ -125,15 +144,45 @@ bool AudioCapture_GetData(AudioCapture* capture, AudioCaptureData* data)
 
 	BYTE* buffer;
 	DWORD flags;
-	UINT64 position;
-	if (FAILED(IAudioCaptureClient_GetBuffer(capture->capture, &buffer, &frames, &flags, NULL, &position)))
+	UINT64 position; // in frames from start of stream
+	UINT64 timestamp; // in 100nsec units, global QPC time
+	if (FAILED(IAudioCaptureClient_GetBuffer(capture->capture, &buffer, &frames, &flags, &position, &timestamp)))
 	{
 		return false;
 	}
 
+	if (capture->firstTime)
+	{
+		// first time we check if device timestamp is resonable - not more than 500 msec away from expected
+		if (expectedTimestamp)
+		{
+			int64_t delta = 1000 * (expectedTimestamp - timestamp);
+			const int64_t maxDelta = 500 * capture->freq;
+
+			if (delta < -maxDelta || delta > +maxDelta)
+			{
+				capture->useDeviceTimestamp = false;
+			}
+			else if (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)
+			{
+				capture->useDeviceTimestamp = false;
+			}
+			capture->startPos = position;
+		}
+		capture->firstTime = false;
+	}
+
+	if (capture->useDeviceTimestamp)
+	{
+		data->time = MFllMulDiv(timestamp, capture->freq, MF_UNITS_PER_SECOND, 0);
+	}
+	else
+	{
+		data->time = capture->startQpc + MFllMulDiv(position - capture->startPos, capture->freq, capture->format->nSamplesPerSec, 0);
+	}
+
 	data->samples = buffer;
 	data->count = frames;
-	data->time = position;
 	return true;
 }
 

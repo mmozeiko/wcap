@@ -276,7 +276,7 @@ static void EncodeCapturedAudio(void)
 	}
 
 	AudioCaptureData data;
-	while (AudioCapture_GetData(&gAudio, &data))
+	while (AudioCapture_GetData(&gAudio, &data, gEncoder.StartTime))
 	{
 		UINT32 FramesToEncode = (UINT32)data.count;
 		if (data.time < gEncoder.StartTime)
