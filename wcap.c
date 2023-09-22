@@ -81,6 +81,7 @@ static HICON gIcon1;
 static HICON gIcon2;
 static UINT WM_TASKBARCREATED;
 static HCURSOR gCursorArrow;
+static HCURSOR gCursorClick;
 static HCURSOR gCursorResize[10];
 static HFONT gFont;
 static HFONT gFontBold;
@@ -107,6 +108,8 @@ static BOOL gRectSelected;
 static POINT gRectSelection[2];
 static POINT gRectMousePos;
 static int gRectResize;
+static int gRectSetSize[2];
+static BOOL gRectSetSizeClick;
 
 // globals
 static HWND gWindow;
@@ -536,6 +539,8 @@ static void CaptureRectangleInit(void)
 	gRectHeight = Height;
 	gRectSelected = FALSE;
 	gRectResize = WCAP_RESIZE_NONE;
+	gRectSetSize[0] = gRectSetSize[1] = 0;
+	gRectSetSizeClick = FALSE;
 
 	SetCursor(gCursorResize[WCAP_RESIZE_NONE]);
 	SetWindowPos(gWindow, HWND_TOPMOST, Info.rcMonitor.left, Info.rcMonitor.top, Width, Height, SWP_SHOWWINDOW);
@@ -673,6 +678,17 @@ BOOL EnableHotKeys(void)
 	return Success;
 }
 
+static void AdjustRectSizeMultipleOf2(int Adjust, int Ref)
+{
+	int W = gRectSelection[Ref].x - gRectSelection[Adjust].x;
+	W = (W + (W > 0)) & ~1;
+	gRectSelection[Adjust].x = gRectSelection[Ref].x - W;
+
+	int H = gRectSelection[Ref].y - gRectSelection[Adjust].y;
+	H = (H + (H > 0)) & ~1;
+	gRectSelection[Adjust].y = gRectSelection[Ref].y - H;
+}
+
 static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_CREATE)
@@ -733,27 +749,37 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	{
 		if (gRectContext)
 		{
-			int X = GET_X_LPARAM(LParam);
-			int Y = GET_Y_LPARAM(LParam);
-
-			int Resize = gRectSelected ? GetPointResize(X, Y) : WCAP_RESIZE_NONE;
-			if (Resize == WCAP_RESIZE_NONE)
+			if (gRectSetSize[0])
 			{
-				// inital rectangle will be empty
-				gRectSelection[0].x = gRectSelection[1].x = X;
-				gRectSelection[0].y = gRectSelection[1].y = Y;
-				gRectSelected = FALSE;
-
+				gRectSetSizeClick = TRUE;
+				gRectSelection[1].x = gRectSelection[0].x + gRectSetSize[0];
+				gRectSelection[1].y = gRectSelection[0].y + gRectSetSize[1];
 				InvalidateRect(Window, NULL, FALSE);
 			}
 			else
 			{
-				// resizing direction
-				gRectMousePos = (POINT){ X, Y };
-			}
+				int X = GET_X_LPARAM(LParam);
+				int Y = GET_Y_LPARAM(LParam);
 
-			gRectResize = Resize;
-			SetCapture(Window);
+				int Resize = gRectSelected ? GetPointResize(X, Y) : WCAP_RESIZE_NONE;
+				if (Resize == WCAP_RESIZE_NONE)
+				{
+					// inital rectangle will be empty
+					gRectSelection[0].x = gRectSelection[1].x = X;
+					gRectSelection[0].y = gRectSelection[1].y = Y;
+					gRectSelected = FALSE;
+
+					InvalidateRect(Window, NULL, FALSE);
+				}
+				else
+				{
+					// resizing direction
+					gRectMousePos = (POINT){ X, Y };
+				}
+
+				gRectResize = Resize;
+				SetCapture(Window);
+			}
 			return 0;
 		}
 	}
@@ -761,17 +787,24 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	{
 		if (gRectContext)
 		{
-			if (gRectSelected)
+			if (gRectSetSizeClick)
 			{
-				// fix the selected rectangle coordinates, so next resizing starts on the correct side
-				int X0 = min(gRectSelection[0].x, gRectSelection[1].x);
-				int Y0 = min(gRectSelection[0].y, gRectSelection[1].y);
-				int X1 = max(gRectSelection[0].x, gRectSelection[1].x);
-				int Y1 = max(gRectSelection[0].y, gRectSelection[1].y);
-				gRectSelection[0] = (POINT){ X0, Y0 };
-				gRectSelection[1] = (POINT){ X1, Y1 };
+				gRectSetSizeClick = FALSE;
 			}
-			ReleaseCapture();
+			else
+			{
+				if (gRectSelected)
+				{
+					// fix the selected rectangle coordinates, so next resizing starts on the correct side
+					int X0 = min(gRectSelection[0].x, gRectSelection[1].x);
+					int Y0 = min(gRectSelection[0].y, gRectSelection[1].y);
+					int X1 = max(gRectSelection[0].x, gRectSelection[1].x);
+					int Y1 = max(gRectSelection[0].y, gRectSelection[1].y);
+					gRectSelection[0] = (POINT){ X0, Y0 };
+					gRectSelection[1] = (POINT){ X1, Y1 };
+				}
+				ReleaseCapture();
+			}
 			return 0;
 		}
 	}
@@ -782,7 +815,16 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 			int X = GET_X_LPARAM(LParam);
 			int Y = GET_Y_LPARAM(LParam);
 
-			if (WParam & MK_LBUTTON)
+			if (gRectSetSize[0])
+			{
+				SetCursor(gCursorClick);
+				InvalidateRect(Window, NULL, FALSE);
+			}
+			else if (gRectSetSizeClick)
+			{
+				InvalidateRect(Window, NULL, FALSE);
+			}
+			else if (WParam & MK_LBUTTON)
 			{
 				BOOL Update = FALSE;
 
@@ -790,12 +832,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 				{
 					// left moved
 					gRectSelection[0].x = X;
+					AdjustRectSizeMultipleOf2(0, 1);
 					Update = TRUE;
 				}
 				else if (gRectResize == WCAP_RESIZE_TR || gRectResize == WCAP_RESIZE_R || gRectResize == WCAP_RESIZE_BR)
 				{
 					// right moved
 					gRectSelection[1].x = X;
+					AdjustRectSizeMultipleOf2(1, 0);
 					Update = TRUE;
 				}
 
@@ -803,12 +847,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 				{
 					// top moved
 					gRectSelection[0].y = Y;
+					AdjustRectSizeMultipleOf2(0, 1);
 					Update = TRUE;
 				}
 				else if (gRectResize == WCAP_RESIZE_BL || gRectResize == WCAP_RESIZE_B || gRectResize == WCAP_RESIZE_BR)
 				{
 					// bottom moved
 					gRectSelection[1].y = Y;
+					AdjustRectSizeMultipleOf2(1, 0);
 					Update = TRUE;
 				}
 
@@ -831,6 +877,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 					// no resize means we're selecting initial rectangle
 					gRectSelection[1].x = X;
 					gRectSelection[1].y = Y;
+					AdjustRectSizeMultipleOf2(1, 0);
 					if (gRectSelection[0].x != gRectSelection[1].x && gRectSelection[0].y != gRectSelection[1].y)
 					{
 						// when we have non-zero size rectangle, we're good with initial stage
@@ -848,6 +895,12 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 			{
 				int Resize = gRectSelected ? GetPointResize(X, Y) : WCAP_RESIZE_NONE;
 				SetCursor(gCursorResize[Resize]);
+
+				if (Resize == WCAP_RESIZE_NONE)
+				{
+					// in case hovering over resize text
+					InvalidateRect(Window, NULL, FALSE);
+				}
 			}
 
 			return 0;
@@ -1044,13 +1097,15 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		{
 			if (gRectContext)
 			{
-				int X = Paint.rcPaint.left;
-				int Y = Paint.rcPaint.top;
-				int W = Paint.rcPaint.right - Paint.rcPaint.left;
-				int H = Paint.rcPaint.bottom - Paint.rcPaint.top;
+				{
+					int X = Paint.rcPaint.left;
+					int Y = Paint.rcPaint.top;
+					int W = Paint.rcPaint.right - Paint.rcPaint.left;
+					int H = Paint.rcPaint.bottom - Paint.rcPaint.top;
 
-				// draw darkened screenshot
-				BitBlt(Context, X, Y, W, H, gRectDarkContext, X, Y, SRCCOPY);
+					// draw darkened screenshot
+					BitBlt(Context, X, Y, W, H, gRectDarkContext, X, Y, SRCCOPY);
+				}
 
 				if (gRectSelected)
 				{
@@ -1072,6 +1127,46 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 					SetTextColor(Context, RGB(255, 255, 255));
 					SetBkMode(Context, TRANSPARENT);
 					ExtTextOutW(Context, X1, Y1, 0, NULL, Text, TextLength, NULL);
+
+					SelectObject(Context, gFontBold);
+					SetTextAlign(Context, TA_BOTTOM | TA_LEFT);
+					SetTextColor(Context, RGB(255, 255, 255));
+
+					const WCHAR TextResize[] = L"Resize:  ";
+
+					SIZE Size;
+					GetTextExtentPoint32W(Context, TextResize, _countof(TextResize) - 1, &Size);
+					ExtTextOutW(Context, X0, Y0, 0, NULL, TextResize, _countof(TextResize) - 1, NULL);
+
+					int X = X0;
+					SelectObject(Context, gFont);
+
+					POINT CursorPos;
+					GetCursorPos(&CursorPos);
+					ScreenToClient(Window, &CursorPos);
+
+					gRectSetSize[0] = gRectSetSize[1] = 0;
+
+					int Sizes[][2] = { { 800, 600 }, { 1280, 720 }, { 1920, 1080 }, { 2560, 1440 } };
+					for (int i=0; i<_countof(Sizes); i++)
+					{
+						X += Size.cx;
+
+						TextLength = StrFormat(Text, L"%dx%d  ", Sizes[i][0], Sizes[i][1]);
+						GetTextExtentPoint32W(Context, Text, TextLength, &Size);
+
+						RECT Rect = { X, Y0 - Size.cy, X + Size.cx, Y0 };
+						BOOL Hovering = PtInRect(&Rect, CursorPos);
+						SetTextColor(Context, Hovering ? RGB(255, 255, 255) : RGB(192, 192, 192));
+						ExtTextOutW(Context, X, Y0, 0, NULL, Text, TextLength, NULL);
+
+						if (Hovering)
+						{
+							gRectSetSize[0] = Sizes[i][0];
+							gRectSetSize[1] = Sizes[i][1];
+							SetCursor(gCursorClick);
+						}
+					}
 				}
 				else
 				{
@@ -1273,6 +1368,7 @@ void WinMainCRTStartup()
 	QueryPerformanceFrequency(&gTickFreq);
 
 	gCursorArrow = LoadCursor(NULL, IDC_ARROW);
+	gCursorClick = LoadCursor(NULL, IDC_HAND);
 	gCursorResize[WCAP_RESIZE_NONE] = LoadCursor(NULL, IDC_CROSS);
 	gCursorResize[WCAP_RESIZE_M]    = LoadCursor(NULL, IDC_SIZEALL);
 	gCursorResize[WCAP_RESIZE_T]    = gCursorResize[WCAP_RESIZE_B]  = LoadCursor(NULL, IDC_SIZENS);
