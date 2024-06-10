@@ -20,6 +20,7 @@ typedef struct Config {
 	BOOL CaptureAudio;
 	BOOL HardwareEncoder;
 	BOOL HardwarePreferIntegrated;
+	BOOL ImprovedColorConversion;
 	// output
 	WCHAR OutputFolder[MAX_PATH];
 	BOOL OpenFolder;

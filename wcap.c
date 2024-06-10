@@ -18,6 +18,7 @@
 #pragma comment (lib, "gdi32.lib")
 #pragma comment (lib, "msimg32.lib")
 #pragma comment (lib, "dxgi.lib")
+#pragma comment (lib, "d3dcompiler.lib")
 #pragma comment (lib, "d3d11.lib")
 #pragma comment (lib, "dwmapi.lib")
 #pragma comment (lib, "shell32.lib")
@@ -392,7 +393,6 @@ static ID3D11Device* CreateDevice(void)
 	ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
 	ID3D11InfoQueue_Release(Info);
 #endif
-
 	return Device;
 }
 

@@ -24,9 +24,21 @@ if "%1" equ "debug" (
   set LINK=/LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
 )
 
-fxc.exe /nologo /T cs_5_0 /E Resize  /O3 /WX /Fh wcap_resize_shader.h  /Vn ResizeShaderBytes  /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl
-fxc.exe /nologo /T cs_5_0 /E Convert /O3 /WX /Fh wcap_convert_shader.h /Vn ConvertShaderBytes /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl
+call :fxc Resize
+call :fxc ConvertSimple
+call :fxc ConvertPass1
+call :fxc ConvertPass2
+call :fxc PrepareLookup8
+call :fxc PrepareLookup16
 
 rc.exe /nologo wcap.rc
 cl.exe /nologo /W3 /WX /MP *.c /Fewcap.exe wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata
 del *.obj *.res >nul
+
+goto :eof
+
+:fxc
+set FXC=/O3 /WX /Qstrip_reflect /Qstrip_debug /Qstrip_priv
+fxc.exe /nologo %FXC% /T cs_5_0 /E %1 /Fo wcap_shader_%1.dxbc /Fc wcap_shader_%1.asm wcap_shaders.hlsl
+fxc.exe /nologo /compress /Vn %1ShaderBytes /Fo wcap_shader_%1.dcs /Fh wcap_shader_%1.h wcap_shader_%1.dxbc
+goto :eof

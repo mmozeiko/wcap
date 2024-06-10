@@ -708,6 +708,7 @@ void Config_Defaults(Config* Config)
 		.CaptureAudio = TRUE,
 		.HardwareEncoder = TRUE,
 		.HardwarePreferIntegrated = FALSE,
+		.ImprovedColorConversion = FALSE,
 		// output
 		.OpenFolder = TRUE,
 		.FragmentedOutput = FALSE,
@@ -810,6 +811,7 @@ void Config_Load(Config* Config, LPCWSTR FileName)
 	Config__GetBool(FileName, L"CaptureAudio",             &Config->CaptureAudio);
 	Config__GetBool(FileName, L"HardwareEncoder",          &Config->HardwareEncoder);
 	Config__GetBool(FileName, L"HardwarePreferIntegrated", &Config->HardwarePreferIntegrated);
+	Config__GetBool(FileName, L"ImprovedColorConversion",  &Config->ImprovedColorConversion);
 	// output
 	WCHAR OutputFolder[MAX_PATH];
 	GetPrivateProfileStringW(INI_SECTION, L"OutputFolder", L"", OutputFolder, _countof(OutputFolder), FileName);
@@ -855,6 +857,7 @@ void Config_Save(Config* Config, LPCWSTR FileName)
 	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",              Config->CaptureAudio             ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",           Config->HardwareEncoder          ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegratged", Config->HardwarePreferIntegrated ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"ImprovedColorConversion",   Config->ImprovedColorConversion ? L"1" : L"0", FileName);
 	// output
 	WritePrivateProfileStringW(INI_SECTION, L"OutputFolder",      Config->OutputFolder, FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OpenFolder",        Config->OpenFolder        ? L"1" : L"0", FileName);
