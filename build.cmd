@@ -21,7 +21,7 @@ if "%1" equ "debug" (
   set LINK=/DEBUG
   set FXC=/Od /Zi
 ) else (
-  set CL=/GL /O1 /DNDEBUG /GS-
+  set CL=/GL /O1 /Oi /DNDEBUG /GS-
   set LINK=/LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
   set FXC=/O3 /Qstrip_reflect /Qstrip_debug /Qstrip_priv
 )
@@ -34,14 +34,14 @@ call :fxc ResizeSinglePass       || exit /b 1
 call :fxc ResizeSingleLinearPass || exit /b 1
 call :fxc Convert
 
-rc.exe /nologo wcap.rc
-cl.exe /nologo /W3 /WX /MP *.c /Fewcap.exe wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata
+rc.exe /nologo wcap.rc || exit /b 1
+cl.exe /nologo /W3 /WX wcap.c wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata || exit /b 1
 del *.obj *.res >nul
 
 goto :eof
 
 :fxc
 if not exist shaders mkdir shaders
-fxc.exe /nologo %FXC% /WX /Ges /T cs_5_0 /E %1 /Fo shaders\%1.dxbc /Fc shaders\%1.asm wcap_shaders.hlsl  || exit /b 1
+fxc.exe /nologo %FXC% /WX /Ges /T cs_5_0 /E %1 /Fo shaders\%1.dxbc /Fc shaders\%1.asm wcap_shaders.hlsl || exit /b 1
 fxc.exe /nologo /compress /Vn %1ShaderBytes /Fo shaders\%1.dcs /Fh shaders\%1.h shaders\%1.dxbc || exit /b 1
 goto :eof
