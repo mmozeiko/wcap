@@ -1,5 +1,5 @@
 #include "wcap_config.h"
-#include "wcap_capture.h"
+#include "wcap_screen_capture.h"
 
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -250,7 +250,7 @@ static void Config__SetDialogValues(HWND Window, Config* Config)
 	EnableWindow(GetDlgItem(Window, ID_GPU_ENCODER + 1),  Config->HardwareEncoder);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), Config->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   Config->EnableLimitSize);
-	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     Capture_CanHideMouseCursor());
+	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     ScreenCapture_CanHideMouseCursor());
 }
 
 void DisableHotKeys(void);

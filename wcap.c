@@ -1,7 +1,7 @@
 #include "wcap.h"
 #include "wcap_config.h"
 #include "wcap_audio_capture.h"
-#include "wcap_capture.h"
+#include "wcap_screen_capture.h"
 #include "wcap_encoder.h"
 
 #include <dxgi1_6.h>
@@ -116,7 +116,7 @@ static BOOL gRectSetSizeClick;
 static HWND gWindow;
 static Config gConfig;
 static AudioCapture gAudio;
-static Capture gCapture;
+static ScreenCapture gCapture;
 static Encoder gEncoder;
 
 static void ShowNotification(LPCWSTR Message, LPCWSTR Title, DWORD Flags)
@@ -235,7 +235,7 @@ static void StartRecording(ID3D11Device* Device)
 		if (!AudioCapture_Start(&gAudio, AUDIO_CAPTURE_BUFFER_DURATION_100NS))
 		{
 			ShowNotification(L"Cannot capture audio!", L"Cannot Start Recording", NIIF_WARNING);
-			Capture_Stop(&gCapture);
+			ScreenCapture_Stop(&gCapture);
 			ID3D11Device_Release(Device);
 			return;
 		}
@@ -248,7 +248,7 @@ static void StartRecording(ID3D11Device* Device)
 		{
 			AudioCapture_Stop(&gAudio);
 		}
-		Capture_Stop(&gCapture);
+		ScreenCapture_Stop(&gCapture);
 		ID3D11Device_Release(Device);
 		return;
 	}
@@ -256,7 +256,7 @@ static void StartRecording(ID3D11Device* Device)
 	gRecordingNextTooltip = 0;
 	gRecordingNextEncode = 0;
 	gRecordingDroppedFrames = 0;
-	Capture_Start(&gCapture, gConfig.MouseCursor);
+	ScreenCapture_Start(&gCapture, gConfig.MouseCursor);
 
 	if (gConfig.CaptureAudio)
 	{
@@ -330,7 +330,7 @@ static void StopRecording(void)
 	}
 	KillTimer(gWindow, WCAP_VIDEO_UPDATE_TIMER);
 
-	Capture_Stop(&gCapture);
+	ScreenCapture_Stop(&gCapture);
 	Encoder_Stop(&gEncoder);
 	if (gConfig.OpenFolder)
 	{
@@ -437,7 +437,7 @@ static void CaptureWindow(void)
 		return;
 	}
 
-	if (!Capture_CreateForWindow(&gCapture, Device, Window, gConfig.OnlyClientArea))
+	if (!ScreenCapture_CreateForWindow(&gCapture, Device, Window, gConfig.OnlyClientArea))
 	{
 		ID3D11Device_Release(Device);
 		ShowNotification(L"Cannot record selected window!", L"Error", NIIF_WARNING);
@@ -465,7 +465,7 @@ static void CaptureMonitor(void)
 		return;
 	}
 
-	if (!Capture_CreateForMonitor(&gCapture, Device, Monitor, NULL))
+	if (!ScreenCapture_CreateForMonitor(&gCapture, Device, Monitor, NULL))
 	{
 		ShowNotification(L"Cannot record selected monitor!", L"Error", NIIF_WARNING);
 		return;
@@ -603,7 +603,7 @@ static void CaptureRectangle(void)
 		return;
 	}
 
-	if (!Capture_CreateForMonitor(&gCapture, Device, gRectMonitor, &Rect))
+	if (!ScreenCapture_CreateForMonitor(&gCapture, Device, gRectMonitor, &Rect))
 	{
 		ShowNotification(L"Cannot record monitor!", L"Error", NIIF_WARNING);
 		return;
@@ -1250,18 +1250,19 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	return DefWindowProcW(Window, Message, WParam, LParam);
 }
 
-static void OnCaptureClose(void)
+static bool OnCaptureFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame)
 {
-	PostMessageW(gWindow, WM_WCAP_STOP_CAPTURE, 0, 0);
-}
+	if (Frame == NULL)
+	{
+		PostMessageW(gWindow, WM_WCAP_STOP_CAPTURE, 0, 0);
+		return true;
+	}
 
-static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
-{
 	BOOL DoEncode = TRUE;
 	DWORD LimitFramerate = gRecordingLimitFramerate;
 	if (LimitFramerate != 0)
 	{
-		if (Time * LimitFramerate < gRecordingNextEncode)
+		if (Frame->Time * LimitFramerate < gRecordingNextEncode)
 		{
 			DoEncode = FALSE;
 		}
@@ -1269,7 +1270,7 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 		{
 			if (gRecordingNextEncode == 0)
 			{
-				gRecordingNextEncode = Time * LimitFramerate;
+				gRecordingNextEncode = Frame->Time * LimitFramerate;
 			}
 			gRecordingNextEncode += gTickFreq.QuadPart;
 		}
@@ -1277,7 +1278,7 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 
 	if (DoEncode)
 	{
-		if (!Encoder_NewFrame(&gEncoder, Texture, Rect, Time, gTickFreq.QuadPart))
+		if (!Encoder_NewFrame(&gEncoder, Frame->Texture, Frame->Rect, Frame->Time, gTickFreq.QuadPart))
 		{
 			// TODO: maybe highlight tray icon when droppped frames are increasing too much?
 			gRecordingDroppedFrames++;
@@ -1290,7 +1291,7 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 
 		if (gConfig.EnableLimitLength)
 		{
-			if (Time - gEncoder.StartTime >= (UINT64)(gConfig.LimitLength * gTickFreq.QuadPart))
+			if (Frame->Time - gEncoder.StartTime >= (UINT64)(gConfig.LimitLength * gTickFreq.QuadPart))
 			{
 				Stop = TRUE;
 			}
@@ -1311,22 +1312,24 @@ static void OnCaptureFrame(ID3D11Texture2D* Texture, RECT Rect, UINT64 Time)
 		if (Stop)
 		{
 			PostMessageW(gWindow, WM_WCAP_STOP_CAPTURE, 0, 0);
-			return;
+			return true;
 		}
 	}
 
 	// update tray title with stats once every second
 	if (gRecordingNextTooltip == 0)
 	{
-		gRecordingNextTooltip = Time + gTickFreq.QuadPart;
+		gRecordingNextTooltip = Frame->Time + gTickFreq.QuadPart;
 	}
-	else if (Time >= gRecordingNextTooltip)
+	else if (Frame->Time >= gRecordingNextTooltip)
 	{
 		gRecordingNextTooltip += gTickFreq.QuadPart;
 
 		// do the update, but not from frame callback to minimize time when texture is used
 		PostMessageW(gWindow, WM_WCAP_TRAY_TITLE, 0, 0);
 	}
+
+	return true;
 }
 
 #ifndef NDEBUG
@@ -1350,7 +1353,7 @@ void WinMainCRTStartup()
 		ExitProcess(0);
 	}
 
-	if (!Capture_IsSupported())
+	if (!ScreenCapture_IsSupported())
 	{
 		MessageBoxW(NULL, L"Windows 10 Version 1903, May 2019 Update (19H1) or newer is required!", WCAP_TITLE, MB_ICONEXCLAMATION);
 		ExitProcess(0);
@@ -1363,7 +1366,7 @@ void WinMainCRTStartup()
 
 	Config_Defaults(&gConfig);
 	Config_Load(&gConfig, gConfigPath);
-	Capture_Init(&gCapture, &OnCaptureClose, &OnCaptureFrame);
+	ScreenCapture_Create(&gCapture, &OnCaptureFrame, false);
 	Encoder_Init(&gEncoder);
 
 	QueryPerformanceFrequency(&gTickFreq);
