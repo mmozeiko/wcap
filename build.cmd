@@ -32,7 +32,9 @@ call :fxc ResizeLinearPassH      || exit /b 1
 call :fxc ResizeLinearPassV      || exit /b 1
 call :fxc ResizeSinglePass       || exit /b 1
 call :fxc ResizeSingleLinearPass || exit /b 1
-call :fxc Convert
+call :fxc ConvertSinglePass      || exit /b 1
+call :fxc ConvertPass1           || exit /b 1
+call :fxc ConvertPass2           || exit /b 1
 
 rc.exe /nologo wcap.rc || exit /b 1
 cl.exe /nologo /W3 /WX wcap.c wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata || exit /b 1

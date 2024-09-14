@@ -10,15 +10,18 @@
 typedef struct
 {
 	ID3D11Texture2D* Texture;
-	ID3D11UnorderedAccessView* ViewY;
-	ID3D11UnorderedAccessView* ViewUV;
+	ID3D11ShaderResourceView* ViewInUV;
+	ID3D11UnorderedAccessView* ViewOutUV;
+	ID3D11UnorderedAccessView* ViewOutY;
 }
 YuvConvertOutput;
 
 typedef struct
 {
 	ID3D11ShaderResourceView* InputView;
-	ID3D11ComputeShader* Shader;
+	ID3D11ComputeShader* SinglePass;
+	ID3D11ComputeShader* Pass1;
+	ID3D11ComputeShader* Pass2;
 	ID3D11Buffer* ConstantBuffer;
 	uint32_t Width;
 	uint32_t Height;
@@ -28,7 +31,7 @@ YuvConvert;
 static void YuvConvertOutput_Create(YuvConvertOutput* Output, ID3D11Device* Device, uint32_t Width, uint32_t Height, DXGI_FORMAT Format);
 static void YuvConvertOutput_Release(YuvConvertOutput* Output);
 
-static void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, DXGI_FORMAT Format);
+static void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, bool IsHD, bool ImprovedConversion);
 static void YuvConvert_Release(YuvConvert* Convert);
 
 static void YuvConvert_Dispatch(YuvConvert* Convert, ID3D11DeviceContext* Context, YuvConvertOutput* Output);
@@ -39,7 +42,9 @@ static void YuvConvert_Dispatch(YuvConvert* Convert, ID3D11DeviceContext* Contex
 
 #include <d3dcompiler.h>
 
-#include "shaders/Convert.h"
+#include "shaders/ConvertSinglePass.h"
+#include "shaders/ConvertPass1.h"
+#include "shaders/ConvertPass2.h"
 
 void YuvConvertOutput_Create(YuvConvertOutput* Output, ID3D11Device* Device, uint32_t Width, uint32_t Height, DXGI_FORMAT Format)
 {
@@ -55,37 +60,45 @@ void YuvConvertOutput_Create(YuvConvertOutput* Output, ID3D11Device* Device, uin
 		.Format = Format,
 		.SampleDesc = { 1, 0 },
 		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
+		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
 	};
 
-	D3D11_UNORDERED_ACCESS_VIEW_DESC ViewDescY =
+	D3D11_UNORDERED_ACCESS_VIEW_DESC ViewOutDescY =
 	{
-		.Format = (Format == DXGI_FORMAT_NV12) ? DXGI_FORMAT_R8_UINT : DXGI_FORMAT_R16_UINT,
+		.Format = (Format == DXGI_FORMAT_NV12) ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_R16_UNORM,
 		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 	};
 
-	D3D11_UNORDERED_ACCESS_VIEW_DESC ViewDescUV =
+	D3D11_UNORDERED_ACCESS_VIEW_DESC ViewOutDescUV =
 	{
-		.Format = (Format == DXGI_FORMAT_NV12) ? DXGI_FORMAT_R8G8_UINT : DXGI_FORMAT_R16G16_UINT,
+		.Format = (Format == DXGI_FORMAT_NV12) ? DXGI_FORMAT_R8G8_UNORM : DXGI_FORMAT_R16G16_UNORM,
 		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+	};
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC ViewInDescUV =
+	{
+		.Format = (Format == DXGI_FORMAT_NV12) ? DXGI_FORMAT_R8G8_UNORM : DXGI_FORMAT_R16G16_UNORM,
+		.ViewDimension = D3D_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D.MipLevels = -1,
 	};
 
 	ID3D11Device_CreateTexture2D(Device, &TextureDesc, NULL, &Output->Texture);
-	ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Output->Texture, &ViewDescY, &Output->ViewY);
-	ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Output->Texture, &ViewDescUV, &Output->ViewUV);
+	ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Output->Texture, &ViewOutDescY, &Output->ViewOutY);
+	ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Output->Texture, &ViewOutDescUV, &Output->ViewOutUV);
+	ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)Output->Texture, &ViewInDescUV, &Output->ViewInUV);
 }
 
 void YuvConvertOutput_Release(YuvConvertOutput* Output)
 {
 	ID3D11Texture2D_Release(Output->Texture);
-	ID3D11UnorderedAccessView_Release(Output->ViewY);
-	ID3D11UnorderedAccessView_Release(Output->ViewUV);
+	ID3D11UnorderedAccessView_Release(Output->ViewOutUV);
+	ID3D11UnorderedAccessView_Release(Output->ViewOutY);
+	ID3D11ShaderResourceView_Release(Output->ViewInUV);
 }
 
-void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, DXGI_FORMAT Format)
+void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, bool IsHD, bool ImprovedConversion)
 {
 	Assert(Width % 2 == 0 && Height % 2 == 0);
-	Assert(Format == DXGI_FORMAT_NV12 || Format == DXGI_FORMAT_P010);
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC InputViewDesc =
 	{
@@ -95,53 +108,65 @@ void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2
 	};
 	ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)InputTexture, &InputViewDesc, &Convert->InputView);
 
-	ID3DBlob* Shader;
-	HR(D3DDecompressShaders(ConvertShaderBytes, sizeof(ConvertShaderBytes), 1, 0, NULL, 0, &Shader, NULL));
-	ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Convert->Shader);
-	ID3D10Blob_Release(Shader);
-
-	float RangeY, OffsetY;
-	float RangeUV, OffsetUV;
-
-	if (Format == DXGI_FORMAT_NV12)
+	// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
+	static const float BT709[7][4] =
 	{
-		// Y=[16..235], UV=[16..240]
-		RangeY = 219.f;
-		OffsetY = 16.5f;
-		RangeUV = 224.f;
-		OffsetUV = 128.5f;
-	}
-	else // Format == DXGI_FORMAT_P010
+		// RGB to YUV
+		{ +0.2126f, +0.7152f, +0.0722f },
+		{ -0.1146f, -0.3854f, +0.5000f },
+		{ +0.5000f, -0.4542f, -0.0458f },
+		// YUV to RGB
+		{ 1.f, +0.0000f, +1.5748f },
+		{ 1.f, -0.1873f, -0.4681f },
+		{ 1.f, +1.8556f, +0.0000f },
+	};
+	// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.601_conversion
+	static const float BT601[7][4] =
 	{
-		// Y=[64..940], UV=[64..960]
-		// mutiplied by 64, because 10-bit values are positioned at top of 16-bit used for texture storage format
-		RangeY = 876.f * 64.f;
-		OffsetY = 64.5f * 64.f;
-		RangeUV = 896.f * 64.f;
-		OffsetUV = 512.5f * 64.f;
-	}
-
-	// BT.709 - https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-	float ConvertMtx[3][4] =
-	{
-		{  0.2126f * RangeY,   0.7152f * RangeY,   0.0722f * RangeY,  OffsetY  },
-		{ -0.1146f * RangeUV, -0.3854f * RangeUV,  0.5f    * RangeUV, OffsetUV },
-		{  0.5f    * RangeUV, -0.4542f * RangeUV, -0.0458f * RangeUV, OffsetUV },
+		// RGB to YUV
+		{ +0.299000f, +0.587000f, +0.114000f },
+		{ -0.168736f, -0.331264f, +0.500000f },
+		{ +0.500000f, -0.418688f, -0.081312f },
+		// YUV to RGB
+		{ 1.f, +0.000000f, +1.402000f },
+		{ 1.f, -0.344136f, -0.714136f },
+		{ 1.f, +1.772000f, +0.000000f },
 	};
 
 	D3D11_BUFFER_DESC ConstantBufferDesc =
 	{
-		.ByteWidth = sizeof(ConvertMtx),
+		.ByteWidth = IsHD ? sizeof(BT709) : sizeof(BT601),
 		.Usage = D3D11_USAGE_IMMUTABLE,
 		.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
 	};
 
 	D3D11_SUBRESOURCE_DATA ConstantBufferData =
 	{
-		.pSysMem = ConvertMtx,
+		.pSysMem = IsHD ? BT709 : BT601,
 	};
 
 	ID3D11Device_CreateBuffer(Device, &ConstantBufferDesc, &ConstantBufferData, &Convert->ConstantBuffer);
+
+	if (ImprovedConversion)
+	{
+		ID3DBlob* Shader;
+		HR(D3DDecompressShaders(ConvertPass1ShaderBytes, sizeof(ConvertPass1ShaderBytes), 1, 0, NULL, 0, &Shader, NULL));
+		ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Convert->Pass1);
+		ID3D10Blob_Release(Shader);
+
+		HR(D3DDecompressShaders(ConvertPass2ShaderBytes, sizeof(ConvertPass2ShaderBytes), 1, 0, NULL, 0, &Shader, NULL));
+		ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Convert->Pass2);
+		ID3D10Blob_Release(Shader);
+		
+		Convert->SinglePass = NULL;
+	}
+	else
+	{
+		ID3DBlob* Shader;
+		HR(D3DDecompressShaders(ConvertSinglePassShaderBytes, sizeof(ConvertSinglePassShaderBytes), 1, 0, NULL, 0, &Shader, NULL));
+		ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Convert->SinglePass);
+		ID3D10Blob_Release(Shader);
+	}
 
 	Convert->Width = Width;
 	Convert->Height = Height;
@@ -150,18 +175,48 @@ void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2
 void YuvConvert_Release(YuvConvert* Convert)
 {
 	ID3D11ShaderResourceView_Release(Convert->InputView);
-	ID3D11ComputeShader_Release(Convert->Shader);
 	ID3D11Buffer_Release(Convert->ConstantBuffer);
+
+	if (Convert->SinglePass)
+	{
+		ID3D11ComputeShader_Release(Convert->SinglePass);
+	}
+	else
+	{
+		ID3D11ComputeShader_Release(Convert->Pass1);
+		ID3D11ComputeShader_Release(Convert->Pass2);
+	}
 }
 
 static void YuvConvert_Dispatch(YuvConvert* Convert, ID3D11DeviceContext* Context, YuvConvertOutput* Output)
 {
-	ID3D11UnorderedAccessView* OutputViews[] = { Output->ViewY, Output->ViewUV };
+	if (Convert->SinglePass)
+	{
+		ID3D11UnorderedAccessView* OutputViews[] = { Output->ViewOutY, Output->ViewOutUV };
 
-	ID3D11DeviceContext_ClearState(Context);
-	ID3D11DeviceContext_CSSetShader(Context, Convert->Shader, NULL, 0);
-	ID3D11DeviceContext_CSSetConstantBuffers(Context, 0, 1, &Convert->ConstantBuffer);
-	ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Convert->InputView);
-	ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, ARRAYSIZE(OutputViews), OutputViews, NULL);
-	ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Convert->Width, 16), DIV_ROUND_UP(Convert->Height, 16), 1);
+		ID3D11DeviceContext_ClearState(Context);
+		ID3D11DeviceContext_CSSetShader(Context, Convert->SinglePass, NULL, 0);
+		ID3D11DeviceContext_CSSetConstantBuffers(Context, 0, 1, &Convert->ConstantBuffer);
+		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Convert->InputView);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, ARRAYSIZE(OutputViews), OutputViews, NULL);
+		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Convert->Width / 2, 16), DIV_ROUND_UP(Convert->Height / 2, 16), 1);
+	}
+	else
+	{
+		ID3D11DeviceContext_ClearState(Context);
+		ID3D11DeviceContext_CSSetShader(Context, Convert->Pass1, NULL, 0);
+		ID3D11DeviceContext_CSSetConstantBuffers(Context, 0, 1, &Convert->ConstantBuffer);
+		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Convert->InputView);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 1, 1, &Output->ViewOutUV, NULL);
+		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Convert->Width / 2, 16), DIV_ROUND_UP(Convert->Height / 2, 16), 1);
+
+		ID3D11ShaderResourceView* InputViews[] = { Convert->InputView, Output->ViewInUV };
+
+		ID3D11DeviceContext_ClearState(Context);
+		ID3D11DeviceContext_CSSetShader(Context, Convert->Pass2, NULL, 0);
+		ID3D11DeviceContext_CSSetConstantBuffers(Context, 0, 1, &Convert->ConstantBuffer);
+		ID3D11DeviceContext_CSSetShaderResources(Context, 0, ARRAYSIZE(InputViews), InputViews);
+		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Output->ViewOutY, NULL);
+		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Convert->Width, 16), DIV_ROUND_UP(Convert->Height, 16), 1);
+	}
 }

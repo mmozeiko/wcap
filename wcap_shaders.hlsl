@@ -160,55 +160,123 @@ void ResizeSingleLinearPass(uint3 OutputPos: SV_DispatchThreadID)
 // RGB -> YUV converter
 //
 
-Texture2D<float3>  ConvertInput    : register(t0);
-RWTexture2D<uint>  ConvertOutputY  : register(u0);
-RWTexture2D<uint2> ConvertOutputUV : register(u1);
+Texture2D<float3>  ConvertIn   : register(t0);
+Texture2D<float2>  ConvertInUV : register(t1);
 
-// YUV conversion matrix
-cbuffer ConvertBuffer : register(b0)
-{
-	row_major float3x4 ConvertMtx;
-};
+RWTexture2D<unorm float>  ConvertOutY  : register(u0);
+RWTexture2D<unorm float2> ConvertOutUV : register(u1);
 
-float3 RgbToYuv(float3 Rgb)
+cbuffer ConvertMatrix : register(b0)
 {
-	return mul(ConvertMtx, float4(Rgb, 1.0));
+	row_major float3x3 RGB_To_YUV;
+	row_major float3x3 YUV_To_RGB;
 }
 
-[numthreads(16, 8, 1)]
-void Convert(uint3 Id: SV_DispatchThreadID)
+// adjustments for "TV" limited range YUV
+// Y  = [ 0.0, +1.0] -> [16, 16+219]
+// UV = [-0.5, +0.5] -> [16, 16+224]
+static const float RANGE_Y  = 219.0 / 255.0;
+static const float RANGE_UV = 224.0 / 255.0;
+static const float OFFSET_Y = 16.0 / 255.0;
+static const float OFFSET_UV = 0.5 / 255.0 + 0.5; // // NV12 cannot be snorm, add 0.5 to output unorm
+
+// https://en.wikipedia.org/wiki/Luma_(video)#Use_of_relative_luminance
+static const float3 LumaWeights = float3(0.2126, 0.7152, 0.0722);
+
+static float LumaFromRGB(float3 LinearColor)
 {
-	int2 InSize;
-	ConvertInput.GetDimensions(InSize.x, InSize.y);
+	return dot(LumaWeights, LinearColor);
+}
 
-	int2 Pos = int2(Id.xy);
-	int2 Pos2 = Pos * 2;
+static float RgbToY(float3 Color)
+{
+	return dot(RGB_To_YUV[0], Color);
+}
 
-	int4 Pos4 = int4(Pos2, Pos2 + int2(1, 1));
+static float2 RgbToUV(float3 Color)
+{
+	return mul(RGB_To_YUV, Color).yz;
+}
 
-	int4 Src = int4(Pos2, min(Pos4.zw, InSize - int2(1, 1)));
+[numthreads(16, 16, 1)]
+void ConvertSinglePass(uint3 OutputPos: SV_DispatchThreadID)
+{
+	// OutputPos is ConvertOutUV dimensions (so half of input image)
+	uint4 Pos4 = OutputPos.xyxy * 2 + uint4(0, 0, 1, 1);
 
-	// load RGB colors in 2x2 area
-	float3 Rgb0 = ConvertInput[Src.xy];
-	float3 Rgb1 = ConvertInput[Src.zy];
-	float3 Rgb2 = ConvertInput[Src.xw];
-	float3 Rgb3 = ConvertInput[Src.zw];
+	float2 InSize;
+	ConvertIn.GetDimensions(InSize.x, InSize.y);
 
-	// convert RGB to YUV
-	float3 Yuv0 = RgbToYuv(Rgb0);
-	float3 Yuv1 = RgbToYuv(Rgb1);
-	float3 Yuv2 = RgbToYuv(Rgb2);
-	float3 Yuv3 = RgbToYuv(Rgb3);
+	// bilinear interpolation of RGB color input
+	// this uses horizontally co-sited & vertically centered locations of chroma values
+	float2 ColorPos = float2(Pos4.xy) / InSize;
+	float3 Color0 = ConvertIn.SampleLevel(LinearSampler, ColorPos, 0, int2(0, 1));
+	float3 Color1 = ConvertIn.SampleLevel(LinearSampler, ColorPos, 0, int2(1, 1));
+	float3 Color = lerp(Color0, Color1, 0.5);
 
-	// average UV
-	float2 UV = (Yuv0.yz + Yuv1.yz + Yuv2.yz + Yuv3.yz) / 4.0;
+	// convert to YUV & store chroma values
+	ConvertOutUV[OutputPos.xy] = RgbToUV(Color) * RANGE_UV + OFFSET_UV;
 
-	// store Y
-	ConvertOutputY[Pos4.xy] = uint(Yuv0.x);
-	ConvertOutputY[Pos4.zy] = uint(Yuv1.x);
-	ConvertOutputY[Pos4.xw] = uint(Yuv2.x);
-	ConvertOutputY[Pos4.zw] = uint(Yuv3.x);
+	// load RGB colors from exact pixel locations, convert & store Y value
+	ConvertOutY[Pos4.xy] = RgbToY(ConvertIn[Pos4.xy]) * RANGE_Y + OFFSET_Y;
+	ConvertOutY[Pos4.zy] = RgbToY(ConvertIn[Pos4.zy]) * RANGE_Y + OFFSET_Y;
+	ConvertOutY[Pos4.xw] = RgbToY(ConvertIn[Pos4.xw]) * RANGE_Y + OFFSET_Y;
+	ConvertOutY[Pos4.zw] = RgbToY(ConvertIn[Pos4.zw]) * RANGE_Y + OFFSET_Y;
+}
 
-	// store UV
-	ConvertOutputUV[Pos] = uint2(UV);
+[numthreads(16, 16, 1)]
+void ConvertPass1(uint3 OutputPos: SV_DispatchThreadID)
+{
+	// OutputPos is ConvertOutUV dimensions (so half of input image)
+	uint2 Pos2 = OutputPos.xy * 2;
+
+	float2 InSize;
+	ConvertIn.GetDimensions(InSize.x, InSize.y);
+
+	// bilinear interpolation of RGB color input
+	// this uses horizontally co-sited & vertically centered chroma locations
+	float2 ColorPos = float2(Pos2) / InSize;
+	float3 Color0 = ConvertIn.SampleLevel(LinearSampler, ColorPos, 0, int2(0, 1));
+	float3 Color1 = ConvertIn.SampleLevel(LinearSampler, ColorPos, 0, int2(1, 1));
+	float3 Color = lerp(Color0, Color1, 0.5);
+
+	// output UV values
+	ConvertOutUV[OutputPos.xy] = RgbToUV(Color) * RANGE_UV + OFFSET_UV;
+}
+
+[numthreads(16, 16, 1)]
+void ConvertPass2(uint3 Pos: SV_DispatchThreadID)
+{
+	float2 InSize;
+	ConvertInUV.GetDimensions(InSize.x, InSize.y);
+
+	// bilinear interpolation of chroma values that decoder is expected to calculate
+	// this uses horizontally co-sited & vertically centered chroma locations
+	float2 PosBase = float2(Pos.xy / 2);
+	float2 PosOffset = (Pos.xy & 1) ? float2(1.0, 0.75) : float2(0.5, 0.25);
+	float2 UV = ConvertInUV.SampleLevel(LinearSampler, (PosBase + PosOffset) / InSize, 0);
+
+	// RGB color value, loaded from exact pixel location
+	float3 Color = ConvertIn[Pos.xy];
+
+	// now for each pixel we want to solve for Y in the following equation:
+	//   dot(W, F(mul(M, T)) == L
+	// where:
+	//   W is vector of 3 luma weights for RGB channels
+	//   M is YUV to RGB conversion matrix
+	//   T is [Y,U,V] column vector
+	//   F(x) is gamma-to-linear function
+	//   L = relative luminance - desired brightness
+
+	// this code solves equation above assuming F(x)=x*x approximation
+	float L = LumaFromRGB(Color*Color);
+	float3 W = LumaWeights;
+	float3 K = mul(YUV_To_RGB, float3(0, UV * (1.0 / RANGE_UV) - (OFFSET_UV / RANGE_UV)));
+	float A = dot(W, K);
+	float B = dot(W, K*K);
+	float C = A*A - B + L;
+	float Y = sqrt(C) - A;
+
+	// output Y value
+	ConvertOutY[Pos.xy] = saturate(Y) * RANGE_Y + OFFSET_Y;
 }

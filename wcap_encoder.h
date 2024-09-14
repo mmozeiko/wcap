@@ -346,6 +346,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Profile = eAVEncH265VProfile_Main_420_10;
 	}
 
+	// https://github.com/mpv-player/mpv/blob/release/0.38/video/csputils.c#L150-L153
+	bool IsHD = (OutputWidth >= 1280) || (OutputHeight > 576) || Config->Config->VideoCodec == CONFIG_VIDEO_H265;
+
 	// output file
 	{
 		IMFAttributes* Attributes;
@@ -373,9 +376,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, Codec));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_MPEG2_PROFILE, Profile));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, IsHD ? MFVideoPrimaries_BT709 : MFVideoPrimaries_SMPTE170M));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, IsHD ? MFVideoTransferMatrix_BT709 : MFVideoTransferMatrix_BT601));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -397,9 +400,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		HR(MFCreateMediaType(&Type));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, MediaFormatYUV));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
-		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_VIDEO_PRIMARIES, IsHD ? MFVideoPrimaries_BT709 : MFVideoPrimaries_SMPTE170M));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_YUV_MATRIX, IsHD ? MFVideoTransferMatrix_BT709 : MFVideoTransferMatrix_BT601));
+		HR(IMFMediaType_SetUINT32(Type, &MF_MT_TRANSFER_FUNCTION, MFVideoPrimaries_BT709));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -547,7 +550,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	// yuv converter
 	{
-		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, ConvertFormat);
+		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, IsHD, false);
 
 		UINT32 Size;
 		HR(MFCalculateImageSize(MediaFormatYUV, OutputWidth, OutputHeight, &Size));
