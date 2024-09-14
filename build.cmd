@@ -19,14 +19,29 @@ if "%VSCMD_ARG_TGT_ARCH%" neq "x64" (
 if "%1" equ "debug" (
   set CL=/MTd /Od /Zi /D_DEBUG /RTC1 /Fdwcap.pdb /fsanitize=address
   set LINK=/DEBUG
+  set FXC=/Od /Zi
 ) else (
   set CL=/GL /O1 /DNDEBUG /GS-
   set LINK=/LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
+  set FXC=/O3 /Qstrip_reflect /Qstrip_debug /Qstrip_priv
 )
 
-fxc.exe /nologo /T cs_5_0 /E Resize  /O3 /WX /Fh wcap_resize_shader.h  /Vn ResizeShaderBytes  /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl
-fxc.exe /nologo /T cs_5_0 /E Convert /O3 /WX /Fh wcap_convert_shader.h /Vn ConvertShaderBytes /Qstrip_reflect /Qstrip_debug /Qstrip_priv wcap_shaders.hlsl
+call :fxc ResizePassH            || exit /b 1
+call :fxc ResizePassV            || exit /b 1
+call :fxc ResizeLinearPassH      || exit /b 1
+call :fxc ResizeLinearPassV      || exit /b 1
+call :fxc ResizeSinglePass       || exit /b 1
+call :fxc ResizeSingleLinearPass || exit /b 1
+call :fxc Convert
 
 rc.exe /nologo wcap.rc
 cl.exe /nologo /W3 /WX /MP *.c /Fewcap.exe wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata
 del *.obj *.res >nul
+
+goto :eof
+
+:fxc
+if not exist shaders mkdir shaders
+fxc.exe /nologo %FXC% /WX /Ges /T cs_5_0 /E %1 /Fo shaders\%1.dxbc /Fc shaders\%1.asm wcap_shaders.hlsl  || exit /b 1
+fxc.exe /nologo /compress /Vn %1ShaderBytes /Fo shaders\%1.dcs /Fh shaders\%1.h shaders\%1.dxbc || exit /b 1
+goto :eof

@@ -18,6 +18,7 @@
 #pragma comment (lib, "gdi32.lib")
 #pragma comment (lib, "msimg32.lib")
 #pragma comment (lib, "dxgi.lib")
+#pragma comment (lib, "d3dcompiler.lib")
 #pragma comment (lib, "d3d11.lib")
 #pragma comment (lib, "dwmapi.lib")
 #pragma comment (lib, "shell32.lib")

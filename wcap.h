@@ -7,6 +7,10 @@
 
 #include <initguid.h>
 #include <windows.h>
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <intrin.h>
 
 #define WCAP_TITLE L"wcap"
@@ -21,6 +25,9 @@
 
 // calculates ceil(X * Num / Den)
 #define MUL_DIV_ROUND_UP(X, Num, Den) (((X) * (Num) - 1) / (Den) + 1)
+
+// caclulates ceil(X / Y)
+#define DIV_ROUND_UP(X, Y) ( ((X) + (Y) - 1) / (Y) )
 
 // MF works with 100nsec units
 #define MF_UNITS_PER_SECOND 10000000ULL
