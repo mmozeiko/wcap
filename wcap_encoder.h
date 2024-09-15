@@ -50,7 +50,6 @@ typedef struct
 	IMFTransform*   Resampler;
 	IMFSample*      AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
 	IMFSample*      AudioInputSample;
-	IMFMediaBuffer* AudioInputBuffer;
 	DWORD           AudioFrameSize;
 	DWORD           AudioSampleRate;
 	DWORD           AudioIndex; // next index to use
@@ -587,18 +586,8 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	if (Encoder->AudioStreamIndex >= 0)
 	{
-		// resampler input buffer/sample
-		{
-			IMFSample* Sample;
-			IMFMediaBuffer* Buffer;
-
-			HR(MFCreateSample(&Sample));
-			HR(MFCreateMemoryBuffer(Config->AudioFormat->nAvgBytesPerSec, &Buffer));
-			HR(IMFSample_AddBuffer(Sample, Buffer));
-
-			Encoder->AudioInputSample = Sample;
-			Encoder->AudioInputBuffer = Buffer;
-		}
+		// resampler input sample
+		HR(MFCreateSample(&Encoder->AudioInputSample));
 
 		// resampler output & audio encoding input buffer/samples
 		for (int i = 0; i < ENCODER_AUDIO_BUFFER_COUNT; i++)
@@ -670,7 +659,6 @@ void Encoder_Stop(Encoder* Encoder)
 			IMFSample_Release(Encoder->AudioSample[i]);
 		}
 		IMFSample_Release(Encoder->AudioInputSample);
-		IMFMediaBuffer_Release(Encoder->AudioInputBuffer);
 	}
 
 	for (size_t OutputIndex = 0; OutputIndex < ENCODER_VIDEO_BUFFER_COUNT; OutputIndex++)
@@ -769,22 +757,103 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	return TRUE;
 }
 
+typedef struct
+{
+	IMFMediaBuffer Buffer;
+	uint8_t* SampleData;
+	uint32_t SampleByteCount;
+	uint32_t References;
+}
+EncoderAudioBuffer;
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnQueryInterface(IMFMediaBuffer* This, REFIID Riid, void** Object)
+{
+	if (Object == NULL)
+	{
+		return E_POINTER;
+	}
+	if (IsEqualGUID(Riid, &IID_IMFMediaBuffer) || IsEqualGUID(Riid, &IID_IUnknown))
+	{
+		*Object = This;
+		return S_OK;
+	}
+	return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__OnAddRef(IMFMediaBuffer* This)
+{
+	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
+	return Buffer->References += 1;
+}
+
+static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__OnRelease(IMFMediaBuffer* This)
+{
+	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
+	return Buffer->References -= 1;
+}
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnLock(IMFMediaBuffer* This, BYTE** OutBuffer, DWORD* OutMaxLength, DWORD* OutCurrentLength)
+{
+	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
+	*OutBuffer = Buffer->SampleData;
+	if (OutMaxLength)
+	{
+		*OutMaxLength = Buffer->SampleByteCount;
+	}
+	if (OutCurrentLength)
+	{
+		*OutCurrentLength = Buffer->SampleByteCount;
+	}
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnUnlock(IMFMediaBuffer* This)
+{
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnGetCurrentLength(IMFMediaBuffer* This, DWORD* OutCurrentLength)
+{
+	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
+	*OutCurrentLength = Buffer->SampleByteCount;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnSetCurrentLength(IMFMediaBuffer* This, DWORD InCurrentLength)
+{
+	return E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnGetMaxLength(IMFMediaBuffer* This, DWORD* OutMaxLength)
+{
+	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
+	*OutMaxLength = Buffer->SampleByteCount;
+	return S_OK;
+}
+
+static IMFMediaBufferVtbl EncoderAudioBufferVtbl =
+{
+	.QueryInterface   = &EncoderAudioBuffer__OnQueryInterface,
+	.AddRef           = &EncoderAudioBuffer__OnAddRef,
+	.Release          = &EncoderAudioBuffer__OnRelease,
+	.Lock             = &EncoderAudioBuffer__OnLock,
+	.Unlock           = &EncoderAudioBuffer__OnUnlock,
+	.GetCurrentLength = &EncoderAudioBuffer__OnGetCurrentLength,
+	.SetCurrentLength = &EncoderAudioBuffer__OnSetCurrentLength,
+	.GetMaxLength     = &EncoderAudioBuffer__OnGetMaxLength,
+};
+
 void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod)
 {
+	EncoderAudioBuffer Input =
+	{
+		.Buffer.lpVtbl = &EncoderAudioBufferVtbl,
+		.SampleData = (BYTE*)Samples,
+		.SampleByteCount = FrameCount * Encoder->AudioFrameSize,
+	};
+
 	IMFSample* AudioSample = Encoder->AudioInputSample;
-	IMFMediaBuffer* Buffer = Encoder->AudioInputBuffer;
-
-	BYTE* BufferData;
-	DWORD MaxLength;
-	HR(IMFMediaBuffer_Lock(Buffer, &BufferData, &MaxLength, NULL));
-
-	DWORD BufferSize = FrameCount * Encoder->AudioFrameSize;
-	Assert(BufferSize <= MaxLength);
-
-	CopyMemory(BufferData, Samples, BufferSize);
-
-	HR(IMFMediaBuffer_Unlock(Buffer));
-	HR(IMFMediaBuffer_SetCurrentLength(Buffer, BufferSize));
+	HR(IMFSample_AddBuffer(AudioSample, &Input.Buffer));
 
 	// setup input time & duration
 	Assert(Encoder->StartTime != 0);
@@ -793,6 +862,9 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UIN
 
 	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0));
 	Encoder__OutputAudioSamples(Encoder);
+
+	HR(IMFSample_RemoveAllBuffers(AudioSample));
+	Assert(Input.References == 0);
 }
 
 void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod)
