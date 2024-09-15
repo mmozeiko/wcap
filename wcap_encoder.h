@@ -5,7 +5,7 @@
 #include "wcap_tex_resize.h"
 #include "wcap_yuv_convert.h"
 
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 
@@ -28,8 +28,8 @@ typedef struct
 
 	IMFAsyncCallback VideoSampleCallback;
 	IMFAsyncCallback AudioSampleCallback;
-	ID3D11Device* Device;
 	ID3D11DeviceContext* Context;
+	ID3D11Multithread* Multithread;
 	IMFSinkWriter* Writer;
 	int VideoStreamIndex;
 	int AudioStreamIndex;
@@ -41,19 +41,18 @@ typedef struct
 
 	YuvConvertOutput ConvertOutput[ENCODER_VIDEO_BUFFER_COUNT];
 	IMFSample*       VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
+	uint64_t         VideoSampleAvailable;
 
 	BOOL   VideoDiscontinuity;
 	UINT64 VideoLastTime;
-	DWORD  VideoIndex; // next index to use
-	LONG   VideoCount; // how many samples are currently available to use
 
 	IMFTransform*   Resampler;
 	IMFSample*      AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
+	uint64_t        AudioSampleAvailable;
+
 	IMFSample*      AudioInputSample;
 	DWORD           AudioFrameSize;
 	DWORD           AudioSampleRate;
-	DWORD           AudioIndex; // next index to use
-	LONG            AudioCount; // how many samples are currently available to use
 }
 Encoder;
 
@@ -123,6 +122,8 @@ static HRESULT STDMETHODCALLTYPE Encoder__GetParameters(IMFAsyncCallback* this, 
 
 static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IMFAsyncResult* Result)
 {
+	Encoder* Enc = CONTAINING_RECORD(this, Encoder, VideoSampleCallback);
+
 	IUnknown* Object;
 	IMFSample* Sample;
 
@@ -131,14 +132,23 @@ static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IM
 	IUnknown_Release(Object);
 	// keep Sample object reference count incremented to reuse for new frame submission
 
-	Encoder* Enc = CONTAINING_RECORD(this, Encoder, VideoSampleCallback);
-	InterlockedIncrement(&Enc->VideoCount);
+	for (size_t Index = 0; Index < ARRAYSIZE(Enc->VideoSample); Index++)
+	{
+		if (Sample == Enc->VideoSample[Index])
+		{
+			_InterlockedOr64(&Enc->VideoSampleAvailable, 1ULL << Index);
+			WakeByAddressSingle(&Enc->VideoSampleAvailable);
+			break;
+		}
+	}
 
 	return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Encoder__AudioInvoke(IMFAsyncCallback* this, IMFAsyncResult* Result)
 {
+	Encoder* Enc = CONTAINING_RECORD(this, Encoder, AudioSampleCallback);
+
 	IUnknown* Object;
 	IMFSample* Sample;
 
@@ -147,29 +157,35 @@ static HRESULT STDMETHODCALLTYPE Encoder__AudioInvoke(IMFAsyncCallback* this, IM
 	IUnknown_Release(Object);
 	// keep Sample object reference count incremented to reuse for new sample submission
 
-	Encoder* Enc = CONTAINING_RECORD(this, Encoder, AudioSampleCallback);
-	InterlockedIncrement(&Enc->AudioCount);
-	WakeByAddressSingle(&Enc->AudioCount);
+	for (size_t Index = 0; Index < ARRAYSIZE(Enc->AudioSample); Index++)
+	{
+		if (Sample == Enc->AudioSample[Index])
+		{
+			_InterlockedOr64(&Enc->AudioSampleAvailable, 1ULL << Index);
+			WakeByAddressSingle(&Enc->AudioSampleAvailable);
+			break;
+		}
+	}
 
 	return S_OK;
 }
 
 static IMFAsyncCallbackVtbl Encoder__VideoSampleCallbackVtbl =
 {
-	&Encoder__QueryInterface,
-	&Encoder__AddRef,
-	&Encoder__Release,
-	&Encoder__GetParameters,
-	&Encoder__VideoInvoke,
+	.QueryInterface = &Encoder__QueryInterface,
+	.AddRef         = &Encoder__AddRef,
+	.Release        = &Encoder__Release,
+	.GetParameters  = &Encoder__GetParameters,
+	.Invoke         = &Encoder__VideoInvoke,
 };
 
 static IMFAsyncCallbackVtbl Encoder__AudioSampleCallbackVtbl =
 {
-	&Encoder__QueryInterface,
-	&Encoder__AddRef,
-	&Encoder__Release,
-	&Encoder__GetParameters,
-	&Encoder__AudioInvoke,
+	.QueryInterface = &Encoder__QueryInterface,
+	.AddRef         = &Encoder__AddRef,
+	.Release        = &Encoder__Release,
+	.GetParameters  = &Encoder__GetParameters,
+	.Invoke         = &Encoder__AudioInvoke,
 };
 
 static void Encoder__OutputAudioSamples(Encoder* Encoder)
@@ -177,15 +193,16 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 	for (;;)
 	{
 		// we don't want to drop any audio frames, so wait for available sample/buffer
-		LONG Count = Encoder->AudioCount;
-		while (Count == 0)
+		uint64_t Available = Encoder->AudioSampleAvailable;
+		while (Available == 0)
 		{
-			LONG Zero = 0;
-			WaitOnAddress(&Encoder->AudioCount, &Zero, sizeof(LONG), INFINITE);
-			Count = Encoder->AudioCount;
+			uint64_t Zero = 0;
+			WaitOnAddress(&Encoder->AudioSampleAvailable, &Zero, sizeof(Zero), INFINITE);
+			Available = Encoder->AudioSampleAvailable;
 		}
 
-		DWORD Index = Encoder->AudioIndex;
+		DWORD Index;
+		_BitScanForward64(&Index, Available);
 
 		IMFSample* Sample = Encoder->AudioSample[Index];
 
@@ -199,8 +216,7 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 		}
 		Assert(SUCCEEDED(hr));
 
-		Encoder->AudioIndex = (Index + 1) % ENCODER_AUDIO_BUFFER_COUNT;
-		InterlockedDecrement(&Encoder->AudioCount);
+		_InterlockedAnd64(&Encoder->AudioSampleAvailable, ~(1ULL << Index));
 
 		IMFTrackedSample* Tracked;
 		HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
@@ -222,13 +238,20 @@ void Encoder_Init(Encoder* Encoder)
 
 BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, const EncoderConfig* Config)
 {
+	ID3D11DeviceContext* Context;
+	ID3D11Device_GetImmediateContext(Device, &Context);
+
+	ID3D11Multithread* Multithread;
+
+	// it is very unclear if this is needed or not, it used to be that D3D11 debug runtime
+	// was complaining if this is not done, but nowadays it doesn't complain anymore? very confusing
+	HR(ID3D11DeviceContext_QueryInterface(Context, &IID_ID3D11Multithread, &Multithread));
+	ID3D11Multithread_SetMultithreadProtected(Multithread, TRUE);
+
 	UINT Token;
 	IMFDXGIDeviceManager* Manager;
 	HR(MFCreateDXGIDeviceManager(&Token, &Manager));
 	HR(IMFDXGIDeviceManager_ResetDevice(Manager, (IUnknown*)Device, Token));
-
-	ID3D11DeviceContext* Context;
-	ID3D11Device_GetImmediateContext(Device, &Context);
 
 	DWORD InputWidth = Config->Width;
 	DWORD InputHeight = Config->Height;
@@ -581,8 +604,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	Encoder->FramerateDen = Config->FramerateDen;
 	Encoder->VideoDiscontinuity = FALSE;
 	Encoder->VideoLastTime = 0x8000000000000000ULL; // some large time in future
-	Encoder->VideoIndex = 0;
-	Encoder->VideoCount = ENCODER_VIDEO_BUFFER_COUNT;
+
+	Assert(ENCODER_VIDEO_BUFFER_COUNT <= 64);
+	Encoder->VideoSampleAvailable = (1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1;
 
 	if (Encoder->AudioStreamIndex >= 0)
 	{
@@ -609,14 +633,15 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Encoder->AudioFrameSize = Config->AudioFormat->nBlockAlign;
 		Encoder->AudioSampleRate = Config->AudioFormat->nSamplesPerSec;
 		Encoder->Resampler = Resampler;
-		Encoder->AudioIndex = 0;
-		Encoder->AudioCount = ENCODER_AUDIO_BUFFER_COUNT;
+
+		Assert(ENCODER_AUDIO_BUFFER_COUNT <= 64);
+		Encoder->AudioSampleAvailable = (1ULL << ENCODER_AUDIO_BUFFER_COUNT) - 1;
 	}
 
-	ID3D11Device_AddRef(Device);
 	ID3D11DeviceContext_AddRef(Context);
+	ID3D11Multithread_AddRef(Multithread);
 	Encoder->Context = Context;
-	Encoder->Device = Device;
+	Encoder->Multithread = Multithread;
 
 	Encoder->StartTime = 0;
 	Encoder->Writer = Writer;
@@ -634,6 +659,8 @@ bail:
 		IMFSinkWriter_Release(Writer);
 		DeleteFileW(FileName);
 	}
+
+	ID3D11Multithread_Release(Multithread);
 	ID3D11DeviceContext_Release(Context);
 	IMFDXGIDeviceManager_Release(Manager);
 
@@ -670,15 +697,16 @@ void Encoder_Stop(Encoder* Encoder)
 	TexResize_Release(&Encoder->Resize);
 	ID3D11RenderTargetView_Release(Encoder->InputView);
 
+	ID3D11Multithread_Release(Encoder->Multithread);
 	ID3D11DeviceContext_Release(Encoder->Context);
-	ID3D11Device_Release(Encoder->Device);
 }
 
 BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod)
 {
 	Encoder->VideoLastTime = Time;
 
-	if (Encoder->VideoCount == 0)
+	uint64_t Available = Encoder->VideoSampleAvailable;
+	if (Available == 0)
 	{
 		// dropped frame
 		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
@@ -686,13 +714,13 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		Encoder->VideoDiscontinuity = TRUE;
 		return FALSE;
 	}
-	DWORD OutputIndex = Encoder->VideoIndex;
-	Encoder->VideoIndex = (OutputIndex + 1) % ENCODER_VIDEO_BUFFER_COUNT;
-	InterlockedDecrement(&Encoder->VideoCount);
 
-	IMFSample* Sample = Encoder->VideoSample[OutputIndex];
+	DWORD Index;
+	_BitScanForward64(&Index, Available);
+	_InterlockedAnd64(&Encoder->VideoSampleAvailable, ~(1ULL << Index));
 
 	ID3D11DeviceContext* Context = Encoder->Context;
+	ID3D11Multithread_Enter(Encoder->Multithread);
 
 	// copy to input texture
 	{
@@ -723,13 +751,17 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	TexResize_Dispatch(&Encoder->Resize, Context);
 
 	// convert to YUV
-	YuvConvert_Dispatch(&Encoder->Convert, Context, &Encoder->ConvertOutput[OutputIndex]);
+	YuvConvert_Dispatch(&Encoder->Convert, Context, &Encoder->ConvertOutput[Index]);
+
+	ID3D11Multithread_Leave(Encoder->Multithread);
 
 	// setup input time & duration
 	if (Encoder->StartTime == 0)
 	{
 		Encoder->StartTime = Time;
 	}
+
+	IMFSample* Sample = Encoder->VideoSample[Index];
 	HR(IMFSample_SetSampleDuration(Sample, MFllMulDiv(Encoder->FramerateDen, MF_UNITS_PER_SECOND, Encoder->FramerateNum, 0)));
 	HR(IMFSample_SetSampleTime(Sample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
@@ -766,7 +798,7 @@ typedef struct
 }
 EncoderAudioBuffer;
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnQueryInterface(IMFMediaBuffer* This, REFIID Riid, void** Object)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__QueryInterface(IMFMediaBuffer* This, REFIID Riid, void** Object)
 {
 	if (Object == NULL)
 	{
@@ -780,19 +812,19 @@ static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnQueryInterface(IMFMediaBu
 	return E_NOINTERFACE;
 }
 
-static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__OnAddRef(IMFMediaBuffer* This)
+static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__AddRef(IMFMediaBuffer* This)
 {
 	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
 	return Buffer->References += 1;
 }
 
-static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__OnRelease(IMFMediaBuffer* This)
+static ULONG STDMETHODCALLTYPE EncoderAudioBuffer__Release(IMFMediaBuffer* This)
 {
 	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
 	return Buffer->References -= 1;
 }
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnLock(IMFMediaBuffer* This, BYTE** OutBuffer, DWORD* OutMaxLength, DWORD* OutCurrentLength)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__Lock(IMFMediaBuffer* This, BYTE** OutBuffer, DWORD* OutMaxLength, DWORD* OutCurrentLength)
 {
 	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
 	*OutBuffer = Buffer->SampleData;
@@ -807,24 +839,24 @@ static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnLock(IMFMediaBuffer* This
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnUnlock(IMFMediaBuffer* This)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__Unlock(IMFMediaBuffer* This)
 {
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnGetCurrentLength(IMFMediaBuffer* This, DWORD* OutCurrentLength)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__GetCurrentLength(IMFMediaBuffer* This, DWORD* OutCurrentLength)
 {
 	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
 	*OutCurrentLength = Buffer->SampleByteCount;
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnSetCurrentLength(IMFMediaBuffer* This, DWORD InCurrentLength)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__SetCurrentLength(IMFMediaBuffer* This, DWORD InCurrentLength)
 {
 	return E_NOTIMPL;
 }
 
-static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnGetMaxLength(IMFMediaBuffer* This, DWORD* OutMaxLength)
+static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__GetMaxLength(IMFMediaBuffer* This, DWORD* OutMaxLength)
 {
 	EncoderAudioBuffer* Buffer = CONTAINING_RECORD(This, EncoderAudioBuffer, Buffer);
 	*OutMaxLength = Buffer->SampleByteCount;
@@ -833,14 +865,14 @@ static HRESULT STDMETHODCALLTYPE EncoderAudioBuffer__OnGetMaxLength(IMFMediaBuff
 
 static IMFMediaBufferVtbl EncoderAudioBufferVtbl =
 {
-	.QueryInterface   = &EncoderAudioBuffer__OnQueryInterface,
-	.AddRef           = &EncoderAudioBuffer__OnAddRef,
-	.Release          = &EncoderAudioBuffer__OnRelease,
-	.Lock             = &EncoderAudioBuffer__OnLock,
-	.Unlock           = &EncoderAudioBuffer__OnUnlock,
-	.GetCurrentLength = &EncoderAudioBuffer__OnGetCurrentLength,
-	.SetCurrentLength = &EncoderAudioBuffer__OnSetCurrentLength,
-	.GetMaxLength     = &EncoderAudioBuffer__OnGetMaxLength,
+	.QueryInterface   = &EncoderAudioBuffer__QueryInterface,
+	.AddRef           = &EncoderAudioBuffer__AddRef,
+	.Release          = &EncoderAudioBuffer__Release,
+	.Lock             = &EncoderAudioBuffer__Lock,
+	.Unlock           = &EncoderAudioBuffer__Unlock,
+	.GetCurrentLength = &EncoderAudioBuffer__GetCurrentLength,
+	.SetCurrentLength = &EncoderAudioBuffer__SetCurrentLength,
+	.GetMaxLength     = &EncoderAudioBuffer__GetMaxLength,
 };
 
 void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod)
