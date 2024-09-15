@@ -25,6 +25,8 @@ typedef struct {
 	uint64_t time; // compatible with QPC 
 } AudioCaptureData;
 
+static bool AudioCapture_CanCaptureApplicationLocal(void);
+
 // make sure CoInitializeEx has been called before calling Start()
 static bool AudioCapture_Start(AudioCapture* capture, uint64_t duration_100ns);
 static void AudioCapture_Stop(AudioCapture* capture);
@@ -38,6 +40,19 @@ static void AudioCapture_ReleaseData(AudioCapture* capture, AudioCaptureData* da
 
 #include <mmdeviceapi.h>
 #include <mfapi.h>
+
+// from ntdll.dll
+extern __declspec(dllimport) LONG WINAPI RtlGetVersion(RTL_OSVERSIONINFOW*);
+
+bool AudioCapture_CanCaptureApplicationLocal(void)
+{
+	RTL_OSVERSIONINFOW version = { sizeof(version) };
+	RtlGetVersion(&version);
+
+	// not exactly sure which version
+	// available since Windows 10 version 2004, May 2020 Update (20H1), build 10.0.19041.0
+	return version.dwMajorVersion > 10 || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 19041);
+}
 
 bool AudioCapture_Start(AudioCapture* capture, uint64_t duration_100ns)
 {

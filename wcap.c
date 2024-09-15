@@ -54,7 +54,7 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 
 #define HOT_RECORD_WINDOW  1
 #define HOT_RECORD_MONITOR 2
-#define HOT_RECORD_RECT    3
+#define HOT_RECORD_REGION  3
 
 #define WCAP_RESIZE_NONE 0
 #define WCAP_RESIZE_TL   1
@@ -256,7 +256,7 @@ static void StartRecording(ID3D11Device* Device)
 	gRecordingNextTooltip = 0;
 	gRecordingNextEncode = 0;
 	gRecordingDroppedFrames = 0;
-	ScreenCapture_Start(&gCapture, gConfig.MouseCursor);
+	ScreenCapture_Start(&gCapture, gConfig.MouseCursor, gConfig.ShowRecordingBorder);
 
 	if (gConfig.CaptureAudio)
 	{
@@ -437,7 +437,7 @@ static void CaptureWindow(void)
 		return;
 	}
 
-	if (!ScreenCapture_CreateForWindow(&gCapture, Device, Window, gConfig.OnlyClientArea))
+	if (!ScreenCapture_CreateForWindow(&gCapture, Device, Window, gConfig.OnlyClientArea, !gConfig.KeepRoundedWindowCorners))
 	{
 		ID3D11Device_Release(Device);
 		ShowNotification(L"Cannot record selected window!", L"Error", NIIF_WARNING);
@@ -474,7 +474,7 @@ static void CaptureMonitor(void)
 	StartRecording(Device);
 }
 
-static void CaptureRectangleInit(void)
+static void CaptureRegionInit(void)
 {
 	POINT Mouse;
 	GetCursorPos(&Mouse);
@@ -549,7 +549,7 @@ static void CaptureRectangleInit(void)
 	InvalidateRect(gWindow, NULL, FALSE);
 }
 
-static void CaptureRectangleDone(void)
+static void CaptureRegionDone(void)
 {
 	ShowWindow(gWindow, SW_HIDE);
 	SetCursor(gCursorArrow);
@@ -571,9 +571,9 @@ static void CaptureRectangleDone(void)
 	}
 }
 
-static void CaptureRectangle(void)
+static void CaptureRegion(void)
 {
-	CaptureRectangleDone();
+	CaptureRegionDone();
 
 	MONITORINFO Info = { .cbSize = sizeof(Info) };
 	GetMonitorInfoW(gRectMonitor, &Info);
@@ -658,7 +658,7 @@ void DisableHotKeys(void)
 {
 	UnregisterHotKey(gWindow, HOT_RECORD_MONITOR);
 	UnregisterHotKey(gWindow, HOT_RECORD_WINDOW);
-	UnregisterHotKey(gWindow, HOT_RECORD_RECT);
+	UnregisterHotKey(gWindow, HOT_RECORD_REGION);
 }
 
 BOOL EnableHotKeys(void)
@@ -672,9 +672,9 @@ BOOL EnableHotKeys(void)
 	{
 		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_WINDOW, HOT_GET_MOD(gConfig.ShortcutWindow), HOT_GET_KEY(gConfig.ShortcutWindow));
 	}
-	if (gConfig.ShortcutRect)
+	if (gConfig.ShortcutRegion)
 	{
-		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_RECT, HOT_GET_MOD(gConfig.ShortcutRect), HOT_GET_KEY(gConfig.ShortcutRect));
+		Success = Success && RegisterHotKey(gWindow, HOT_RECORD_REGION, HOT_GET_MOD(gConfig.ShortcutRegion), HOT_GET_KEY(gConfig.ShortcutRegion));
 	}
 	return Success;
 }
@@ -712,7 +712,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	{
 		if (gRectContext)
 		{
-			CaptureRectangleDone();
+			CaptureRegionDone();
 		}
 		return 0;
 	}
@@ -722,7 +722,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		{
 			if (WParam == FALSE)
 			{
-				CaptureRectangleDone();
+				CaptureRegionDone();
 				return 0;
 			}
 		}
@@ -733,14 +733,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 		{
 			if (WParam == VK_ESCAPE)
 			{
-				CaptureRectangleDone();
+				CaptureRegionDone();
 				return 0;
 			}
 			else if (WParam == VK_RETURN)
 			{
 				if (gRectSelected)
 				{
-					CaptureRectangle();
+					CaptureRegion();
 				}
 				return 0;
 			}
@@ -1027,10 +1027,10 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 					CaptureMonitor();
 					gRecordingStarted = FALSE;
 				}
-				else if (WParam == HOT_RECORD_RECT)
+				else if (WParam == HOT_RECORD_REGION)
 				{
 					gRecordingStarted = TRUE;
-					CaptureRectangleInit();
+					CaptureRegionInit();
 					gRecordingStarted = FALSE;
 				}
 			}
@@ -1176,7 +1176,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 					SelectObject(Context, GetStockObject(DC_PEN));
 					SelectObject(Context, GetStockObject(DC_BRUSH));
 
-					const WCHAR Line1[] = L"Select area with the mouse and press ENTER to start capture.";
+					const WCHAR Line1[] = L"Select region with the mouse and press ENTER to start capture.";
 					const WCHAR Line2[] = L"Press ESC to cancel.";
 
 					const WCHAR* Lines[] = { Line1, Line2 };

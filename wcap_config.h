@@ -22,7 +22,8 @@ typedef struct
 	// capture
 	BOOL MouseCursor;
 	BOOL OnlyClientArea;
-	BOOL CaptureAudio;
+	BOOL ShowRecordingBorder;
+	BOOL KeepRoundedWindowCorners;
 	BOOL HardwareEncoder;
 	BOOL HardwarePreferIntegrated;
 	// output
@@ -34,6 +35,8 @@ typedef struct
 	DWORD LimitLength;
 	DWORD LimitSize;
 	// video
+	BOOL GammaCorrectResize;
+	BOOL ImprovedColorConversion;
 	DWORD VideoCodec;
 	DWORD VideoProfile;
 	DWORD VideoMaxWidth;
@@ -41,6 +44,8 @@ typedef struct
 	DWORD VideoMaxFramerate;
 	DWORD VideoBitrate;
 	// audio
+	BOOL CaptureAudio;
+	BOOL ApplicationLocalAudio;
 	DWORD AudioCodec;
 	DWORD AudioChannels;
 	DWORD AudioSamplerate;
@@ -48,7 +53,7 @@ typedef struct
 	// shortcuts
 	DWORD ShortcutMonitor;
 	DWORD ShortcutWindow;
-	DWORD ShortcutRect;
+	DWORD ShortcutRegion;
 }
 Config;
 
@@ -66,6 +71,7 @@ static BOOL Config_ShowDialog(Config* C);
 //
 
 #include "wcap_screen_capture.h"
+#include "wcap_audio_capture.h"
 
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -75,31 +81,41 @@ static BOOL Config_ShowDialog(Config* C);
 #define INI_SECTION L"wcap"
 
 // control id's
-#define ID_OK                  IDOK     // 1
-#define ID_CANCEL              IDCANCEL // 2
-#define ID_DEFAULTS            3
-#define ID_MOUSE_CURSOR        20
-#define ID_ONLY_CLIENT_AREA    30
-#define ID_CAPTURE_AUDIO       40
-#define ID_GPU_ENCODER         50
-#define ID_OUTPUT_FOLDER       60
-#define ID_OPEN_FOLDER         70
-#define ID_FRAGMENTED_MP4      80
-#define ID_LIMIT_LENGTH        90
-#define ID_LIMIT_SIZE          100
-#define ID_VIDEO_CODEC         110
-#define ID_VIDEO_PROFILE       120
-#define ID_VIDEO_MAX_WIDTH     130
-#define ID_VIDEO_MAX_HEIGHT    140
-#define ID_VIDEO_MAX_FRAMERATE 150
-#define ID_VIDEO_BITRATE       160
-#define ID_AUDIO_CODEC         170
-#define ID_AUDIO_CHANNELS      180
-#define ID_AUDIO_SAMPLERATE    190
-#define ID_AUDIO_BITRATE       200
-#define ID_SHORTCUT_MONITOR    210
-#define ID_SHORTCUT_WINDOW     220
-#define ID_SHORTCUT_RECT       230
+#define ID_OK                      IDOK     // 1
+#define ID_CANCEL                  IDCANCEL // 2
+#define ID_DEFAULTS                3
+
+#define ID_MOUSE_CURSOR            20
+#define ID_ONLY_CLIENT_AREA        30
+#define ID_SHOW_RECORDING_BORDER   40
+#define ID_ROUNDED_CORNERS         50
+#define ID_GPU_ENCODER             60
+
+#define ID_OUTPUT_FOLDER           100
+#define ID_OPEN_FOLDER             110
+#define ID_FRAGMENTED_MP4          120
+#define ID_LIMIT_LENGTH            130
+#define ID_LIMIT_SIZE              140
+
+#define ID_VIDEO_GAMMA_RESIZE      200
+#define ID_VIDEO_IMPROVED_CONVERT  210
+#define ID_VIDEO_CODEC             220
+#define ID_VIDEO_PROFILE           230
+#define ID_VIDEO_MAX_WIDTH         240
+#define ID_VIDEO_MAX_HEIGHT        250
+#define ID_VIDEO_MAX_FRAMERATE     260
+#define ID_VIDEO_BITRATE           270
+
+#define ID_AUDIO_CAPTURE           300
+#define ID_AUDIO_APPLICATION_LOCAL 310
+#define ID_AUDIO_CODEC             320
+#define ID_AUDIO_CHANNELS          330
+#define ID_AUDIO_SAMPLERATE        340
+#define ID_AUDIO_BITRATE           350
+
+#define ID_SHORTCUT_MONITOR        400
+#define ID_SHORTCUT_WINDOW         410
+#define ID_SHORTCUT_REGION         420
 
 // control types
 #define ITEM_CHECKBOX (1<<0)
@@ -122,8 +138,8 @@ static BOOL Config_ShowDialog(Config* C);
 #define COL01W 154
 #define COL10W 144
 #define COL11W 130
-#define ROW0H 86
-#define ROW1H 96
+#define ROW0H 84
+#define ROW1H 124
 #define ROW2H 56
 
 #define PADDING 4             // padding for dialog and group boxes
@@ -264,10 +280,11 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	Config__UpdateAudioBitrate(Window, C->AudioCodec, C->AudioBitrate);
 
 	// capture
-	CheckDlgButton(Window, ID_MOUSE_CURSOR,       C->MouseCursor);
-	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,   C->OnlyClientArea);
-	CheckDlgButton(Window, ID_CAPTURE_AUDIO,      C->CaptureAudio);
-	CheckDlgButton(Window, ID_GPU_ENCODER,        C->HardwareEncoder);
+	CheckDlgButton(Window, ID_MOUSE_CURSOR,          C->MouseCursor);
+	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,      C->OnlyClientArea);
+	CheckDlgButton(Window, ID_SHOW_RECORDING_BORDER, C->ShowRecordingBorder);
+	CheckDlgButton(Window, ID_ROUNDED_CORNERS,       C->KeepRoundedWindowCorners);
+	CheckDlgButton(Window, ID_GPU_ENCODER,           C->HardwareEncoder);
 	SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_SETCURSEL, C->HardwarePreferIntegrated ? 0 : 1, 0);
 
 	// output
@@ -280,6 +297,8 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	SetDlgItemInt(Window, ID_LIMIT_SIZE + 1,   C->LimitSize,   FALSE);
 
 	// video
+	CheckDlgButton(Window, ID_VIDEO_GAMMA_RESIZE,     C->GammaCorrectResize);
+	CheckDlgButton(Window, ID_VIDEO_IMPROVED_CONVERT, C->ImprovedColorConversion);
 	SendDlgItemMessageW(Window, ID_VIDEO_CODEC, CB_SETCURSEL, C->VideoCodec, 0);
 	Config__SelectVideoProfile(Window, C->VideoCodec, C->VideoProfile);
 	SetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     C->VideoMaxWidth,     FALSE);
@@ -288,6 +307,8 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	SetDlgItemInt(Window, ID_VIDEO_BITRATE,       C->VideoBitrate,      FALSE);
 
 	// audio
+	CheckDlgButton(Window, ID_AUDIO_CAPTURE, C->CaptureAudio);
+	CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, C->ApplicationLocalAudio);
 	SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_SETCURSEL, C->AudioCodec, 0);
 	SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_SETCURSEL, C->AudioChannels - 1, 0);
 	WCHAR Text[64];
@@ -311,14 +332,18 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	Config__FormatKey(C->ShortcutWindow, Text);
 	SetDlgItemTextW(Window, ID_SHORTCUT_WINDOW, Text);
 	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW), GWLP_USERDATA, C->ShortcutWindow);
-	Config__FormatKey(C->ShortcutRect, Text);
-	SetDlgItemTextW(Window, ID_SHORTCUT_RECT, Text);
-	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT), GWLP_USERDATA, C->ShortcutRect);
+	Config__FormatKey(C->ShortcutRegion, Text);
+	SetDlgItemTextW(Window, ID_SHORTCUT_REGION, Text);
+	SetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_REGION), GWLP_USERDATA, C->ShortcutRegion);
 
 	EnableWindow(GetDlgItem(Window, ID_GPU_ENCODER + 1),  C->HardwareEncoder);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), C->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   C->EnableLimitSize);
-	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),     ScreenCapture_CanHideMouseCursor());
+
+	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),            ScreenCapture_CanHideMouseCursor());
+	EnableWindow(GetDlgItem(Window, ID_SHOW_RECORDING_BORDER),   ScreenCapture_CanHideRecordingBorder());
+	EnableWindow(GetDlgItem(Window, ID_ROUNDED_CORNERS),         ScreenCapture_CanDisableRoundedCorners());
+	EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL), AudioCapture_CanCaptureApplicationLocal());
 }
 
 void DisableHotKeys(void);
@@ -420,10 +445,11 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		if (Control == ID_OK)
 		{
 			// capture
-			C->MouseCursor       = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
-			C->OnlyClientArea    = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
-			C->CaptureAudio      = IsDlgButtonChecked(Window, ID_CAPTURE_AUDIO);
-			C->HardwareEncoder   = IsDlgButtonChecked(Window, ID_GPU_ENCODER);
+			C->MouseCursor              = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
+			C->OnlyClientArea           = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
+			C->ShowRecordingBorder      = IsDlgButtonChecked(Window, ID_SHOW_RECORDING_BORDER);
+			C->KeepRoundedWindowCorners = IsDlgButtonChecked(Window, ID_ROUNDED_CORNERS);
+			C->HardwareEncoder          = IsDlgButtonChecked(Window, ID_GPU_ENCODER);
 			C->HardwarePreferIntegrated = (DWORD)SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_GETCURSEL, 0, 0) == 0;
 
 			// output
@@ -435,16 +461,20 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->LimitLength       = GetDlgItemInt(Window,      ID_LIMIT_LENGTH + 1, NULL, FALSE);
 			C->LimitSize         = GetDlgItemInt(Window,      ID_LIMIT_SIZE + 1,   NULL, FALSE);
 			// video
-			C->VideoCodec        = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_CODEC,   CB_GETCURSEL, 0, 0);
-			C->VideoProfile      = Config__GetSelectedVideoProfile(Window);
-			C->VideoMaxWidth     = GetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     NULL, FALSE);
-			C->VideoMaxHeight    = GetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    NULL, FALSE);
-			C->VideoMaxFramerate = GetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, NULL, FALSE);
-			C->VideoBitrate      = GetDlgItemInt(Window, ID_VIDEO_BITRATE,       NULL, FALSE);
+			C->GammaCorrectResize      = IsDlgButtonChecked(Window, ID_VIDEO_GAMMA_RESIZE);
+			C->ImprovedColorConversion = IsDlgButtonChecked(Window, ID_VIDEO_IMPROVED_CONVERT);
+			C->VideoCodec              = (DWORD)SendDlgItemMessageW(Window, ID_VIDEO_CODEC,   CB_GETCURSEL, 0, 0);
+			C->VideoProfile            = Config__GetSelectedVideoProfile(Window);
+			C->VideoMaxWidth           = GetDlgItemInt(Window, ID_VIDEO_MAX_WIDTH,     NULL, FALSE);
+			C->VideoMaxHeight          = GetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    NULL, FALSE);
+			C->VideoMaxFramerate       = GetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, NULL, FALSE);
+			C->VideoBitrate            = GetDlgItemInt(Window, ID_VIDEO_BITRATE,       NULL, FALSE);
 			// audio
-			C->AudioCodec      = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CODEC,    CB_GETCURSEL, 0, 0);
-			C->AudioChannels   = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_GETCURSEL, 0, 0) + 1;
-			C->AudioSamplerate = gAudioSamplerates[SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_GETCURSEL, 0, 0)];
+			C->CaptureAudio          = IsDlgButtonChecked(Window, ID_AUDIO_CAPTURE);
+			C->ApplicationLocalAudio = IsDlgButtonChecked(Window, ID_AUDIO_APPLICATION_LOCAL);
+			C->AudioCodec            = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CODEC,    CB_GETCURSEL, 0, 0);
+			C->AudioChannels         = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_GETCURSEL, 0, 0) + 1;
+			C->AudioSamplerate       = gAudioSamplerates[SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_GETCURSEL, 0, 0)];
 			if (C->AudioCodec == CONFIG_AUDIO_AAC)
 			{
 				C->AudioBitrate = gAudioBitrates[SendDlgItemMessageW(Window, ID_AUDIO_BITRATE, CB_GETCURSEL, 0, 0)];
@@ -452,7 +482,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			// shortcuts
 			C->ShortcutMonitor = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_MONITOR), GWLP_USERDATA);
 			C->ShortcutWindow  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW),  GWLP_USERDATA);
-			C->ShortcutRect    = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_RECT),    GWLP_USERDATA);
+			C->ShortcutRegion  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_REGION),  GWLP_USERDATA);
 
 			EndDialog(Window, TRUE);
 			return TRUE;
@@ -535,7 +565,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		}
 		else if ((Control == ID_SHORTCUT_MONITOR ||
 		          Control == ID_SHORTCUT_WINDOW ||
-		          Control == ID_SHORTCUT_RECT) && HIWORD(WParam) == BN_CLICKED)
+		          Control == ID_SHORTCUT_REGION) && HIWORD(WParam) == BN_CLICKED)
 		{
 			if (gConfigShortcut.Control == 0)
 			{
@@ -774,7 +804,8 @@ void Config_Defaults(Config* C)
 		// capture
 		.MouseCursor = TRUE,
 		.OnlyClientArea = TRUE,
-		.CaptureAudio = TRUE,
+		.ShowRecordingBorder = TRUE,
+		.KeepRoundedWindowCorners = TRUE,
 		.HardwareEncoder = TRUE,
 		.HardwarePreferIntegrated = FALSE,
 		// output
@@ -783,8 +814,10 @@ void Config_Defaults(Config* C)
 		.EnableLimitLength = FALSE,
 		.EnableLimitSize = FALSE,
 		.LimitLength = 60,
-		.LimitSize = 8,
+		.LimitSize = 25,
 		// video
+		.GammaCorrectResize = FALSE,
+		.ImprovedColorConversion = FALSE,
 		.VideoCodec = CONFIG_VIDEO_H264,
 		.VideoProfile = CONFIG_VIDEO_HIGH,
 		.VideoMaxWidth = 1920,
@@ -792,6 +825,8 @@ void Config_Defaults(Config* C)
 		.VideoMaxFramerate = 60,
 		.VideoBitrate = 8000,
 		// audio
+		.CaptureAudio = TRUE,
+		.ApplicationLocalAudio = TRUE,
 		.AudioCodec = CONFIG_AUDIO_AAC,
 		.AudioChannels = 2,
 		.AudioSamplerate = 48000,
@@ -799,7 +834,7 @@ void Config_Defaults(Config* C)
 		// shortcuts
 		.ShortcutMonitor = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL),
 		.ShortcutWindow = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_WIN),
-		.ShortcutRect = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_SHIFT),
+		.ShortcutRegion = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_SHIFT),
 	};
 
 	LPWSTR VideoFolder;
@@ -876,7 +911,8 @@ void Config_Load(Config* C, LPCWSTR FileName)
 	// capture
 	Config__GetBool(FileName, L"MouseCursor",              &C->MouseCursor);
 	Config__GetBool(FileName, L"OnlyClientArea",           &C->OnlyClientArea);
-	Config__GetBool(FileName, L"CaptureAudio",             &C->CaptureAudio);
+	Config__GetBool(FileName, L"ShowRecordingBorder",      &C->ShowRecordingBorder);
+	Config__GetBool(FileName, L"KeepRoundedWindowCorners", &C->KeepRoundedWindowCorners);
 	Config__GetBool(FileName, L"HardwareEncoder",          &C->HardwareEncoder);
 	Config__GetBool(FileName, L"HardwarePreferIntegrated", &C->HardwarePreferIntegrated);
 	// output
@@ -890,21 +926,25 @@ void Config_Load(Config* C, LPCWSTR FileName)
 	Config__GetInt(FileName,  L"LimitLength",       &C->LimitLength, NULL);
 	Config__GetInt(FileName,  L"LimitSize",         &C->LimitSize,   NULL);
 	// video
-	Config__GetStr(FileName, L"VideoCodec",        &C->VideoCodec,        gVideoCodecs);
-	Config__GetStr(FileName, L"VideoProfile",      &C->VideoProfile,      gVideoProfiles);
-	Config__GetInt(FileName, L"VideoMaxWidth",     &C->VideoMaxWidth,     NULL);
-	Config__GetInt(FileName, L"VideoMaxHeight",    &C->VideoMaxHeight,    NULL);
-	Config__GetInt(FileName, L"VideoMaxFramerate", &C->VideoMaxFramerate, NULL);
-	Config__GetInt(FileName, L"VideoBitrate",      &C->VideoBitrate,      NULL);
+	Config__GetBool(FileName, L"GammaCorrectResize",      &C->GammaCorrectResize);
+	Config__GetBool(FileName, L"ImprovedColorConversion", &C->ImprovedColorConversion);
+	Config__GetStr(FileName, L"VideoCodec",               &C->VideoCodec,        gVideoCodecs);
+	Config__GetStr(FileName, L"VideoProfile",             &C->VideoProfile,      gVideoProfiles);
+	Config__GetInt(FileName, L"VideoMaxWidth",            &C->VideoMaxWidth,     NULL);
+	Config__GetInt(FileName, L"VideoMaxHeight",           &C->VideoMaxHeight,    NULL);
+	Config__GetInt(FileName, L"VideoMaxFramerate",        &C->VideoMaxFramerate, NULL);
+	Config__GetInt(FileName, L"VideoBitrate",             &C->VideoBitrate,      NULL);
 	// audio
-	Config__GetStr(FileName, L"AudioCodec",      &C->AudioCodec,      gAudioCodecs);
-	Config__GetInt(FileName, L"AudioChannels",   &C->AudioChannels,   (DWORD[]) { 1, 2, 0 });
-	Config__GetInt(FileName, L"AudioSamplerate", &C->AudioSamplerate, gAudioSamplerates);
-	Config__GetInt(FileName, L"AudioBitrate",    &C->AudioBitrate,    gAudioBitrates);
+	Config__GetBool(FileName, L"CaptureAudio",          &C->CaptureAudio);
+	Config__GetBool(FileName, L"ApplicationLocalAudio", &C->ApplicationLocalAudio);
+	Config__GetStr(FileName, L"AudioCodec",             &C->AudioCodec,      gAudioCodecs);
+	Config__GetInt(FileName, L"AudioChannels",          &C->AudioChannels,   (DWORD[]) { 1, 2, 0 });
+	Config__GetInt(FileName, L"AudioSamplerate",        &C->AudioSamplerate, gAudioSamplerates);
+	Config__GetInt(FileName, L"AudioBitrate",           &C->AudioBitrate,    gAudioBitrates);
 	// shortcuts
 	Config__GetInt(FileName, L"ShortcutMonitor", &C->ShortcutMonitor, NULL);
 	Config__GetInt(FileName, L"ShortcutWindow",  &C->ShortcutWindow,  NULL);
-	Config__GetInt(FileName, L"ShortcutRect",    &C->ShortcutRect,    NULL);
+	Config__GetInt(FileName, L"ShortcutRect",    &C->ShortcutRegion,  NULL);
 
 	Config__ValidateVideoProfile(C);
 }
@@ -919,11 +959,12 @@ static void Config__WriteInt(LPCWSTR FileName, LPCWSTR Key, DWORD Value)
 void Config_Save(Config* C, LPCWSTR FileName)
 {
 	// capture
-	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",               C->MouseCursor              ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",            C->OnlyClientArea           ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",              C->CaptureAudio             ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",           C->HardwareEncoder          ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegratged", C->HardwarePreferIntegrated ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"MouseCursor",              C->MouseCursor              ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",           C->OnlyClientArea           ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"ShowRecordingBorder",      C->ShowRecordingBorder      ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"KeepRoundedWindowCorners", C->KeepRoundedWindowCorners ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",          C->HardwareEncoder          ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegratged",C->HardwarePreferIntegrated ? L"1" : L"0", FileName);
 	// output
 	WritePrivateProfileStringW(INI_SECTION, L"OutputFolder",      C->OutputFolder, FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OpenFolder",        C->OpenFolder        ? L"1" : L"0", FileName);
@@ -933,6 +974,8 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	Config__WriteInt(FileName, L"LimitLength", C->LimitLength);
 	Config__WriteInt(FileName, L"LimitSize", C->LimitSize);
 	// video
+	WritePrivateProfileStringW(INI_SECTION, L"GammaCorrectResize",      C->GammaCorrectResize      ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"ImprovedColorConversion", C->ImprovedColorConversion ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"VideoCodec",   gVideoCodecs[C->VideoCodec],     FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"VideoProfile", gVideoProfiles[C->VideoProfile], FileName);
 	Config__WriteInt(FileName, L"VideoMaxWidth",     C->VideoMaxWidth);
@@ -940,14 +983,16 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	Config__WriteInt(FileName, L"VideoMaxFramerate", C->VideoMaxFramerate);
 	Config__WriteInt(FileName, L"VideoBitrate",      C->VideoBitrate);
 	// audio
-	WritePrivateProfileStringW(INI_SECTION, L"AudioCodec",    gAudioCodecs[C->AudioCodec], FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",          C->CaptureAudio          ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"ApplicationLocalAudio", C->ApplicationLocalAudio ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"AudioCodec", gAudioCodecs[C->AudioCodec], FileName);
 	Config__WriteInt(FileName, L"AudioChannels",   C->AudioChannels);
 	Config__WriteInt(FileName, L"AudioSamplerate", C->AudioSamplerate);
 	Config__WriteInt(FileName, L"AudioBitrate",    C->AudioBitrate);
 	// shortcuts
 	Config__WriteInt(FileName, L"ShortcutMonitor", C->ShortcutMonitor);
 	Config__WriteInt(FileName, L"ShortcutWindow",  C->ShortcutWindow);
-	Config__WriteInt(FileName, L"ShortcutRect",    C->ShortcutRect);
+	Config__WriteInt(FileName, L"ShortcutRect",    C->ShortcutRegion);
 }
 
 BOOL Config_ShowDialog(Config* C)
@@ -970,10 +1015,11 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "&Mouse Cursor",       ID_MOUSE_CURSOR,       ITEM_CHECKBOX                     },
-					{ "Only &Client Area",   ID_ONLY_CLIENT_AREA,   ITEM_CHECKBOX                     },
-					{ "Capture Au&dio",      ID_CAPTURE_AUDIO,      ITEM_CHECKBOX                     },
-					{ "GPU &Encoder",        ID_GPU_ENCODER,        ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
+					{ "&Mouse Cursor",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
+					{ "Only &Client Area",            ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
+					{ "Show Recording &Border",       ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
+					{ "Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
+					{ "GPU &Encoder",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
 					{ NULL },
 				},
 			},
@@ -982,11 +1028,11 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { COL00W + PADDING, 0, COL01W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "",                        ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
-					{ "O&pen When Finished",     ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
-					{ "Fragmented MP&4",         ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
-					{ "Limit &Length (seconds)", ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
-					{ "Limit &Size (MB)",        ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ "",                            ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
+					{ "O&pen When Finished",         ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
+					{ "Fragmented MP&4 (H264 only)", ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
+					{ "Limit &Length (seconds)",     ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ "Limit &Size (MB)",            ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
 					{ NULL },
 				},
 			},
@@ -995,12 +1041,14 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Codec",            ID_VIDEO_CODEC,         ITEM_COMBOBOX, 64 },
-					{ "Profile",          ID_VIDEO_PROFILE,       ITEM_COMBOBOX, 64 },
-					{ "Max &Width",       ID_VIDEO_MAX_WIDTH,     ITEM_NUMBER,   64 },
-					{ "Max &Height",      ID_VIDEO_MAX_HEIGHT,    ITEM_NUMBER,   64 },
-					{ "Max &Framerate",   ID_VIDEO_MAX_FRAMERATE, ITEM_NUMBER,   64 },
-					{ "Bitrate (kbit/s)", ID_VIDEO_BITRATE,       ITEM_NUMBER,   64 },
+					{ "&Gamma Correct Resize",               ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
+					{ "&Improved Color Conversion (BETA)",   ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
+					{ "Codec",                               ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
+					{ "Profile",                             ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
+					{ "Max &Width",                          ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
+					{ "Max &Height",                         ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
+					{ "Max &Framerate",                      ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
+					{ "Bitrate (kbit/s)",                    ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},
@@ -1009,10 +1057,12 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { COL10W + PADDING, ROW0H, COL11W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Codec",            ID_AUDIO_CODEC,      ITEM_COMBOBOX, 60 },
-					{ "Channels",         ID_AUDIO_CHANNELS,   ITEM_COMBOBOX, 60 },
-					{ "Samplerate",       ID_AUDIO_SAMPLERATE, ITEM_COMBOBOX, 60 },
-					{ "Bitrate (kbit/s)", ID_AUDIO_BITRATE,    ITEM_COMBOBOX, 60 },
+					{ "Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
+					{ "Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
+					{ "Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
+					{ "Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
+					{ "Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
+					{ "Bitrate (kbit/s)",         ID_AUDIO_BITRATE,           ITEM_COMBOBOX, 60 },
 					{ NULL },
 				},
 			},
@@ -1021,9 +1071,9 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { 0, ROW0H + ROW1H, COL00W + PADDING + COL01W, ROW2H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Capture Monitor",   ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
-					{ "Capture Window",    ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
-					{ "Capture Rectangle", ID_SHORTCUT_RECT,    ITEM_HOTKEY, 64 },
+					{ "Capture Monitor", ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
+					{ "Capture Window",  ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
+					{ "Capture Region",  ID_SHORTCUT_REGION,  ITEM_HOTKEY, 64 },
 					{ NULL },
 				},
 			},

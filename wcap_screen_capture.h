@@ -2,6 +2,9 @@
 
 #include "wcap.h"
 #include <d3d11.h>
+#include <dwmapi.h>
+
+#define WINDOWS_FOUNDATION_UNIVERSALAPICONTRACT_VERSION 0xc0000
 #include <windows.graphics.capture.h>
 
 typedef struct IGraphicsCaptureItemInterop IGraphicsCaptureItemInterop;
@@ -50,11 +53,16 @@ typedef struct ScreenCapture
 	RECT Rect;
 	HWND Window;
 	bool OnlyClientArea;
+
+	bool RestoreWindowCornerPreference;
+	DWM_WINDOW_CORNER_PREFERENCE WindowCornerPreference;
 }
 ScreenCapture;
 
 static bool ScreenCapture_IsSupported(void);
 static bool ScreenCapture_CanHideMouseCursor(void);
+static bool ScreenCapture_CanHideRecordingBorder(void);
+static bool ScreenCapture_CanDisableRoundedCorners(void);
 
 // if OnFrame is NULL then you need to periodically call GetFrame/ReleaseFrame manually
 // if OnFrame is not NULL and CallbackOnThread is false then callback will be invoked from message processing loop on the same thread as Create call
@@ -62,9 +70,9 @@ static bool ScreenCapture_CanHideMouseCursor(void);
 static void ScreenCapture_Create(ScreenCapture* Capture, ScreenCapture_OnFrameCallback* OnFrame, bool CallbackOnThread);
 static void ScreenCapture_Release(ScreenCapture* Capture);
 
-static bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea);
+static bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea, bool DisableRoundedCorners);
 static bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device, HMONITOR Monitor, const RECT* Rect);
-static void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor);
+static void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder);
 static void ScreenCapture_Stop(ScreenCapture* Capture);
 
 static bool ScreenCapture_GetFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame);
@@ -75,7 +83,6 @@ static void ScreenCapture_ReleaseFrame(ScreenCapture* Capture, ScreenCaptureFram
 //
 
 #include <dxgi.h>
-#include <dwmapi.h>
 #include <roapi.h>
 
 #ifndef SCREEN_CAPTURE_BUFFER_COUNT
@@ -110,11 +117,11 @@ typedef struct {
 
 struct IGraphicsCaptureItemInteropVtbl
 {
-	STDMETHOD(QueryInterface)(IGraphicsCaptureItemInterop* this, const GUID* riid, void** object);
-	STDMETHOD_(ULONG, AddRef)(IGraphicsCaptureItemInterop* this);
-	STDMETHOD_(ULONG, Release)(IGraphicsCaptureItemInterop* this);
-	STDMETHOD(CreateForWindow)(IGraphicsCaptureItemInterop* this, HWND window, const GUID* riid, void** result);
-	STDMETHOD(CreateForMonitor)(IGraphicsCaptureItemInterop* this, HMONITOR monitor, const GUID* riid, void** result);
+	STDMETHOD(QueryInterface)(IGraphicsCaptureItemInterop* This, const GUID* Riid, void** Object);
+	STDMETHOD_(ULONG, AddRef)(IGraphicsCaptureItemInterop* This);
+	STDMETHOD_(ULONG, Release)(IGraphicsCaptureItemInterop* This);
+	STDMETHOD(CreateForWindow)(IGraphicsCaptureItemInterop* This, HWND Window, const GUID* Riid, void** Result);
+	STDMETHOD(CreateForMonitor)(IGraphicsCaptureItemInterop* This, HMONITOR Monitor, const GUID* Riid, void** Result);
 };
 
 struct IGraphicsCaptureItemInterop
@@ -126,10 +133,10 @@ typedef struct IDirect3DDxgiInterfaceAccess IDirect3DDxgiInterfaceAccess;
 
 struct IDirect3DDxgiInterfaceAccessVtbl
 {
-	STDMETHOD(QueryInterface)(IDirect3DDxgiInterfaceAccess* this, const GUID* riid, void** object);
-	STDMETHOD_(ULONG, AddRef)(IDirect3DDxgiInterfaceAccess* this);
-	STDMETHOD_(ULONG, Release)(IDirect3DDxgiInterfaceAccess* this);
-	STDMETHOD(GetInterface)(IDirect3DDxgiInterfaceAccess* this, const GUID* riid, void** object);
+	STDMETHOD(QueryInterface)(IDirect3DDxgiInterfaceAccess* This, const GUID* Riid, void** Object);
+	STDMETHOD_(ULONG, AddRef)(IDirect3DDxgiInterfaceAccess* This);
+	STDMETHOD_(ULONG, Release)(IDirect3DDxgiInterfaceAccess* This);
+	STDMETHOD(GetInterface)(IDirect3DDxgiInterfaceAccess* This, const GUID* Riid, void** Object);
 };
 
 struct IDirect3DDxgiInterfaceAccess
@@ -148,6 +155,7 @@ extern __declspec(dllimport) HRESULT WINAPI CreateDirect3D11DeviceFromDXGIDevice
 
 DEFINE_GUID(IID_IClosable,                           0x30d5a829, 0x7fa4, 0x4026, 0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e);
 DEFINE_GUID(IID_IGraphicsCaptureSession2,            0x2c39ae40, 0x7d2e, 0x5044, 0x80, 0x4e, 0x8b, 0x67, 0x99, 0xd4, 0xcf, 0x9e);
+DEFINE_GUID(IID_IGraphicsCaptureSession3,            0xf2cdd966, 0x22ae, 0x5ea1, 0x95, 0x96, 0x3a, 0x28, 0x93, 0x44, 0xc3, 0xbe);
 DEFINE_GUID(IID_IGraphicsCaptureItemInterop,         0x3628e81b, 0x3cac, 0x4c60, 0xb7, 0xf4, 0x23, 0xce, 0x0e, 0x0c, 0x33, 0x56);
 DEFINE_GUID(IID_IGraphicsCaptureItem,                0x79c3f95b, 0x31f7, 0x4ec2, 0xa4, 0x64, 0x63, 0x2e, 0xf5, 0xd3, 0x07, 0x60);
 DEFINE_GUID(IID_IGraphicsCaptureItemHandler,         0xe9c610c0, 0xa68c, 0x5bd9, 0x80, 0x21, 0x85, 0x89, 0x34, 0x6e, 0xee, 0xe2);
@@ -306,20 +314,38 @@ static bool ScreenCapture__CreateFramePool(ScreenCapture* Capture, __x_ABI_CWind
 
 bool ScreenCapture_IsSupported(void)
 {
-	RTL_OSVERSIONINFOW version = { sizeof(version) };
-	RtlGetVersion(&version);
+	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
+	RtlGetVersion(&Version);
 
 	// available since Windows 10 version 1903, May 2019 Update (19H1), build 10.0.18362.0
-	return version.dwMajorVersion > 10 || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 18362);
+	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 18362);
 }
 
 bool ScreenCapture_CanHideMouseCursor(void)
 {
-	RTL_OSVERSIONINFOW version = { sizeof(version) };
-	RtlGetVersion(&version);
+	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
+	RtlGetVersion(&Version);
 
 	// available since Windows 10 version 2004, May 2020 Update (20H1), build 10.0.19041.0
-	return version.dwMajorVersion > 10 || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 19041);
+	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 19041);
+}
+
+bool ScreenCapture_CanHideRecordingBorder(void)
+{
+	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
+	RtlGetVersion(&Version);
+
+	// available since Windows 11, build 10.0.22000.0
+	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 22000);
+}
+
+bool ScreenCapture_CanDisableRoundedCorners(void)
+{
+	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
+	RtlGetVersion(&Version);
+
+	// available since Windows 11, build 10.0.22000.0
+	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 22000);
 }
 
 void ScreenCapture_Create(ScreenCapture* Capture, ScreenCapture_OnFrameCallback* OnFrame, bool CallbackOnThread)
@@ -390,7 +416,7 @@ void ScreenCapture_Release(ScreenCapture* Capture)
 	RoUninitialize();
 }
 
-bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea)
+bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea, bool DisableRoundedCorners)
 {
 	IDXGIDevice* DxgiDevice;
 	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
@@ -415,6 +441,19 @@ bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device,
 			Capture->CurrentSize.Width = Rect.right - Rect.left;
 			Capture->CurrentSize.Height = Rect.bottom - Rect.top;
 			Capture->Rect = Rect;
+
+			Capture->RestoreWindowCornerPreference = false;
+			if (DisableRoundedCorners)
+			{
+				if (SUCCEEDED(DwmGetWindowAttribute(Window, DWMWA_WINDOW_CORNER_PREFERENCE, &Capture->WindowCornerPreference, sizeof(Capture->WindowCornerPreference))))
+				{
+					DWM_WINDOW_CORNER_PREFERENCE Preference = DWMWCP_DONOTROUND;
+					if (SUCCEEDED(DwmSetWindowAttribute(Window, DWMWA_WINDOW_CORNER_PREFERENCE, &Preference, sizeof(Preference))))
+					{
+						Capture->RestoreWindowCornerPreference = true;
+					}
+				}
+			}
 
 			return true;
 		}
@@ -446,6 +485,8 @@ bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device
 			Capture->Window = NULL;
 			Capture->CurrentSize = Size;
 			Capture->Rect = Rect ? *Rect : (RECT) { 0, 0, Size.Width, Size.Height };
+
+			Capture->RestoreWindowCornerPreference = false;
 			return true;
 		}
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_Release(Item);
@@ -455,7 +496,7 @@ bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device
 	return false;
 }
 
-void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor)
+void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder)
 {
 	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession* Session;
 	HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_CreateCaptureSession(Capture->FramePool, Capture->Item, &Session));
@@ -465,6 +506,13 @@ void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor)
 	{
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession2_put_IsCursorCaptureEnabled(Session2, (boolean)WithMouseCursor);
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession2_Release(Session2);
+	}
+
+	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession3* Session3;
+	if (SUCCEEDED(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Session, &IID_IGraphicsCaptureSession3, (void**)&Session3)))
+	{
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession3_put_IsBorderRequired(Session3, (boolean)WithRecordingBorder);
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession3_Release(Session3);
 	}
 
 	if (Capture->OnFrame)
@@ -479,25 +527,50 @@ void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor)
 
 void ScreenCapture_Stop(ScreenCapture* Capture)
 {
-	if (Capture->OnFrame)
+	__x_ABI_CWindows_CFoundation_CIClosable* Closable;
+
+	if (Capture->OnFrameToken.value)
 	{
 		HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_remove_FrameArrived(Capture->FramePool, Capture->OnFrameToken));
-		HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_remove_Closed(Capture->Item, Capture->OnCloseToken));
+		Capture->OnFrameToken.value = 0;
 	}
 
-	__x_ABI_CWindows_CFoundation_CIClosable* Closable;
-	HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Capture->Session, &IID_IClosable, (void**)&Closable));
-	HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
-	__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
+	if (Capture->OnCloseToken.value)
+	{
+		HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_remove_Closed(Capture->Item, Capture->OnCloseToken));
+		Capture->OnCloseToken.value = 0;
+	}
 
-	HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_QueryInterface(Capture->FramePool, &IID_IClosable, (void**)&Closable));
-	HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
-	__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
+	if (Capture->Session)
+	{
+		HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Capture->Session, &IID_IClosable, (void**)&Closable));
+		HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
+		__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_Release(Capture->Session);
 
-	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_Release(Capture->Session);
-	__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_Release(Capture->FramePool);
-	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_Release(Capture->Item);
-	__x_ABI_CWindows_CGraphics_CDirectX_CDirect3D11_CIDirect3DDevice_Release(Capture->Device);
+		Capture->Session = NULL;
+	}
+
+	if (Capture->Item)
+	{
+		HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_QueryInterface(Capture->FramePool, &IID_IClosable, (void**)&Closable));
+		HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
+		__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
+		__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_Release(Capture->FramePool);
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_Release(Capture->Item);
+		Capture->Item = NULL;
+	}
+
+	if (Capture->Device)
+	{
+		__x_ABI_CWindows_CGraphics_CDirectX_CDirect3D11_CIDirect3DDevice_Release(Capture->Device);
+		Capture->Device = NULL;
+	}
+
+	if (Capture->RestoreWindowCornerPreference)
+	{
+		DwmSetWindowAttribute(Capture->Window, DWMWA_WINDOW_CORNER_PREFERENCE, &Capture->WindowCornerPreference, sizeof(Capture->WindowCornerPreference));
+	}
 }
 
 bool ScreenCapture_GetFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame)

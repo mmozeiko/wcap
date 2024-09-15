@@ -535,7 +535,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	// input texture
 	{
-		TexResize_Create(&Encoder->Resize, Device, InputWidth, InputHeight, OutputWidth, OutputHeight, false, D3D11_BIND_RENDER_TARGET);
+		TexResize_Create(&Encoder->Resize, Device, InputWidth, InputHeight, OutputWidth, OutputHeight, Config->Config->GammaCorrectResize, D3D11_BIND_RENDER_TARGET);
 
 		D3D11_RENDER_TARGET_VIEW_DESC InputViewDesc =
 		{
@@ -550,7 +550,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 	// yuv converter
 	{
-		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, IsHD, false);
+		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, IsHD, Config->Config->ImprovedColorConversion);
 
 		UINT32 Size;
 		HR(MFCalculateImageSize(MediaFormatYUV, OutputWidth, OutputHeight, &Size));
