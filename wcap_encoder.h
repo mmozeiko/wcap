@@ -74,7 +74,7 @@ static BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileNam
 static void Encoder_Stop(Encoder* Encoder);
 
 static BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod);
-static void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UINT64 Time, UINT64 TimePeriod);
+static void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod);
 static void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod);
 static void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize);
 
@@ -769,7 +769,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	return TRUE;
 }
 
-void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UINT64 Time, UINT64 TimePeriod)
+void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod)
 {
 	IMFSample* AudioSample = Encoder->AudioInputSample;
 	IMFMediaBuffer* Buffer = Encoder->AudioInputBuffer;
@@ -778,24 +778,17 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UIN
 	DWORD MaxLength;
 	HR(IMFMediaBuffer_Lock(Buffer, &BufferData, &MaxLength, NULL));
 
-	DWORD BufferSize = VideoCount * Encoder->AudioFrameSize;
+	DWORD BufferSize = FrameCount * Encoder->AudioFrameSize;
 	Assert(BufferSize <= MaxLength);
 
-	if (Samples)
-	{
-		CopyMemory(BufferData, Samples, BufferSize);
-	}
-	else
-	{
-		ZeroMemory(BufferData, BufferSize);
-	}
+	CopyMemory(BufferData, Samples, BufferSize);
 
 	HR(IMFMediaBuffer_Unlock(Buffer));
 	HR(IMFMediaBuffer_SetCurrentLength(Buffer, BufferSize));
 
 	// setup input time & duration
 	Assert(Encoder->StartTime != 0);
-	HR(IMFSample_SetSampleDuration(AudioSample, MFllMulDiv(VideoCount, MF_UNITS_PER_SECOND, Encoder->AudioSampleRate, 0)));
+	HR(IMFSample_SetSampleDuration(AudioSample, MFllMulDiv(FrameCount, MF_UNITS_PER_SECOND, Encoder->AudioSampleRate, 0)));
 	HR(IMFSample_SetSampleTime(AudioSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
 	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0));
@@ -805,7 +798,7 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD VideoCount, UIN
 void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod)
 {
 	// if there was no frame during last second, add discontinuity
-	if (Time - Encoder->VideoLastTime >= TimePeriod)
+	if ((int64_t)(Time - Encoder->VideoLastTime) >= (int64_t)TimePeriod)
 	{
 		Encoder->VideoLastTime = Time;
 		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);

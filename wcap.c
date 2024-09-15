@@ -28,11 +28,14 @@
 #pragma comment (lib, "mfreadwrite")
 #pragma comment (lib, "evr")
 #pragma comment (lib, "strmiids")
+#pragma comment (lib, "ksuser")
+#pragma comment (lib, "mmdevapi")
 #pragma comment (lib, "ole32")
 #pragma comment (lib, "wmcodecdspuuid")
 #pragma comment (lib, "avrt")
 #pragma comment (lib, "uxtheme")
-#pragma comment (lib, "WindowsApp")
+#pragma comment (lib, "OneCore")
+#pragma comment (lib, "CoreMessaging")
 
 // this is needed to be able to use Nvidia Media Foundation encoders on Optimus systems
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
@@ -71,9 +74,6 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 #define WCAP_UI_FONT_SIZE 16
 
 #define WCAP_RECT_BORDER 2
-
-// 1 second, we'll be reading it every 100msec
-#define AUDIO_CAPTURE_BUFFER_DURATION_100NS 10 * 1000 * 1000
 
 // constants
 static WCHAR gConfigPath[MAX_PATH];
@@ -193,7 +193,7 @@ static void ShowFileInFolder(LPCWSTR Filename)
 	}
 }
 
-static void StartRecording(ID3D11Device* Device)
+static void StartRecording(ID3D11Device* Device, HWND Window)
 {
 	SYSTEMTIME Time;
 	GetLocalTime(&Time);
@@ -232,14 +232,15 @@ static void StartRecording(ID3D11Device* Device)
 
 	if (gConfig.CaptureAudio)
 	{
-		if (!AudioCapture_Start(&gAudio, AUDIO_CAPTURE_BUFFER_DURATION_100NS))
+		HWND ApplicationWindow = gConfig.ApplicationLocalAudio && AudioCapture_CanCaptureApplicationLocal() ? Window : NULL;
+		if (!AudioCapture_Start(&gAudio, ApplicationWindow))
 		{
 			ShowNotification(L"Cannot capture audio!", L"Cannot Start Recording", NIIF_WARNING);
 			ScreenCapture_Stop(&gCapture);
 			ID3D11Device_Release(Device);
 			return;
 		}
-		EncConfig.AudioFormat = gAudio.format;
+		EncConfig.AudioFormat = gAudio.Format;
 	}
 
 	if (!Encoder_Start(&gEncoder, Device, gRecordingPath, &EncConfig))
@@ -279,26 +280,26 @@ static void EncodeCapturedAudio(void)
 		return;
 	}
 
-	AudioCaptureData data;
-	while (AudioCapture_GetData(&gAudio, &data, gEncoder.StartTime))
+	AudioCaptureData Data;
+	while (AudioCapture_GetData(&gAudio, &Data, gEncoder.StartTime))
 	{
-		UINT32 FramesToEncode = (UINT32)data.count;
-		if (data.time < gEncoder.StartTime)
+		UINT32 FramesToEncode = (UINT32)Data.Count;
+		if (Data.Time < gEncoder.StartTime)
 		{
-			const UINT32 SampleRate = gAudio.format->nSamplesPerSec;
-			const UINT32 BytesPerFrame = gAudio.format->nBlockAlign;
+			const UINT32 SampleRate = gAudio.Format->nSamplesPerSec;
+			const UINT32 BytesPerFrame = gAudio.Format->nBlockAlign;
 
 			// figure out how much time (100nsec units) and frame count to skip from current buffer
-			UINT64 TimeToSkip = gEncoder.StartTime - data.time;
+			UINT64 TimeToSkip = gEncoder.StartTime - Data.Time;
 			UINT32 FramesToSkip = (UINT32)((TimeToSkip * SampleRate - 1) / MF_UNITS_PER_SECOND + 1);
 			if (FramesToSkip < FramesToEncode)
 			{
 				// need to skip part of captured data
-				data.time += FramesToSkip * MF_UNITS_PER_SECOND / SampleRate;
+				Data.Time += FramesToSkip * MF_UNITS_PER_SECOND / SampleRate;
 				FramesToEncode -= FramesToSkip;
-				if (data.samples)
+				if (Data.Samples)
 				{
-					data.samples = (BYTE*)data.samples + FramesToSkip * BytesPerFrame;
+					Data.Samples = (BYTE*)Data.Samples + FramesToSkip * BytesPerFrame;
 				}
 			}
 			else
@@ -309,10 +310,10 @@ static void EncodeCapturedAudio(void)
 		}
 		if (FramesToEncode != 0)
 		{
-			Assert(data.time >= gEncoder.StartTime);
-			Encoder_NewSamples(&gEncoder, data.samples, FramesToEncode, data.time, gTickFreq.QuadPart);
+			Assert(Data.Time >= gEncoder.StartTime);
+			Encoder_NewSamples(&gEncoder, Data.Samples, FramesToEncode, Data.Time, gTickFreq.QuadPart);
 		}
-		AudioCapture_ReleaseData(&gAudio, &data);
+		AudioCapture_ReleaseData(&gAudio, &Data);
 	}
 }
 
@@ -371,7 +372,7 @@ static ID3D11Device* CreateDevice(void)
 	ID3D11Device* Device;
 
 	UINT flags = 0;
-#ifdef _DEBUG
+#ifndef NDEBUG
 	flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 	// if adapter is selected then driver type must be unknown
@@ -385,14 +386,17 @@ static ID3D11Device* CreateDevice(void)
 	{
 		IDXGIAdapter_Release(Adapter);
 	}
-		
-#ifdef _DEBUG
-	ID3D11InfoQueue* Info;
-	HR(ID3D11Device_QueryInterface(Device, &IID_ID3D11InfoQueue, &Info));
-	ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-	ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
-	ID3D11InfoQueue_Release(Info);
-#endif
+
+	if (flags & D3D11_CREATE_DEVICE_DEBUG)
+	{
+		ID3D11InfoQueue* Info;
+		if (SUCCEEDED(ID3D11Device_QueryInterface(Device, &IID_ID3D11InfoQueue, &Info)))
+		{
+			ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			ID3D11InfoQueue_SetBreakOnSeverity(Info, D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
+			ID3D11InfoQueue_Release(Info);
+		}
+	}
 
 	return Device;
 }
@@ -444,7 +448,7 @@ static void CaptureWindow(void)
 		return;
 	}
 
-	StartRecording(Device);
+	StartRecording(Device, Window);
 }
 
 static void CaptureMonitor(void)
@@ -471,7 +475,7 @@ static void CaptureMonitor(void)
 		return;
 	}
 
-	StartRecording(Device);
+	StartRecording(Device, NULL);
 }
 
 static void CaptureRegionInit(void)
@@ -609,7 +613,7 @@ static void CaptureRegion(void)
 		return;
 	}
 
-	StartRecording(Device);
+	StartRecording(Device, NULL);
 }
 
 static int GetPointResize(int X, int Y)
