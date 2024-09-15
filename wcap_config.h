@@ -264,6 +264,36 @@ static void Config__FormatKey(DWORD KeyMod, WCHAR* Text)
 	if (Mod & MOD_ALT)     StrCatW(Text, L"Alt + ");
 	if (Mod & MOD_SHIFT)   StrCatW(Text, L"Shift + ");
 
+	struct
+	{
+		DWORD Key;
+		LPWSTR Text;
+	}
+	static const Overrides[] =
+	{
+		{ VK_PAUSE,    L"Pause"    },
+		{ VK_SNAPSHOT, L"PrtScr"   },
+		{ VK_PRIOR,    L"PageUp"   },
+		{ VK_NEXT,     L"PageDown" },
+		{ VK_END,      L"End"      },
+		{ VK_HOME,     L"Home"     },
+		{ VK_LEFT,     L"Left"     },
+		{ VK_UP,       L"Up"       },
+		{ VK_RIGHT,    L"Right"    },
+		{ VK_DOWN,     L"Down"     },
+		{ VK_INSERT,   L"Insert"   },
+		{ VK_DELETE,   L"Delete"   },
+	};
+
+	for (size_t i = 0; i < ARRAYSIZE(Overrides); i++)
+	{
+		if (Overrides[i].Key == HOT_GET_KEY(KeyMod))
+		{
+			StrCatW(Text, Overrides[i].Text);
+			return;
+		}
+	}
+
 	WCHAR KeyText[32];
 	UINT ScanCode = MapVirtualKeyW(HOT_GET_KEY(KeyMod), MAPVK_VK_TO_VSC);
 	if (GetKeyNameTextW(ScanCode << 16, KeyText, _countof(KeyText)) == 0)
