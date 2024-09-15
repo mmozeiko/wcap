@@ -103,16 +103,7 @@ static float3 ResizePass(uint2 OutputPos, int2 Direction)
 	return ColorSum / WeightSum;
 }
 
-static float3 ResizeSingle(uint2 OutputPos)
-{
-	int2 OutSize;
-	ResizeOut.GetDimensions(OutSize.x, OutSize.y);
-
-	float2 InputPos = (float2(OutputPos) + 0.5) / OutSize;
-	return ResizeIn.SampleLevel(LinearSampler, InputPos, 0);
-}
-
-// fancy resize horizontal & vertical passes
+// horizontal & vertical passes
 
 [numthreads(16, 16, 1)]
 void ResizePassH(uint3 OutputPos: SV_DispatchThreadID)
@@ -126,7 +117,7 @@ void ResizePassV(uint3 OutputPos: SV_DispatchThreadID)
 	ResizeOut[OutputPos.xy] = PackToBGR(ResizePass(OutputPos.xy, int2(0, 1)));
 }
 
-// fancy resize horizontal & vertical passes for linear color
+// resize horizontal & vertical passes in linear space
 
 [numthreads(16, 16, 1)]
 void ResizeLinearPassH(uint3 OutputPos: SV_DispatchThreadID)
@@ -138,22 +129,6 @@ void ResizeLinearPassH(uint3 OutputPos: SV_DispatchThreadID)
 void ResizeLinearPassV(uint3 OutputPos: SV_DispatchThreadID)
 {
 	ResizeOut[OutputPos.xy] = LinearPackToBGR(ResizePass(OutputPos.xy, int2(0, 1)));
-}
-
-// simple resize pass
-
-[numthreads(16, 16, 1)]
-void ResizeSinglePass(uint3 OutputPos: SV_DispatchThreadID)
-{
-	ResizeOut[OutputPos.xy] = PackToBGR(ResizeSingle(OutputPos.xy));
-}
-
-// simple resize for linear color
-
-[numthreads(16, 16, 1)]
-void ResizeSingleLinearPass(uint3 OutputPos: SV_DispatchThreadID)
-{
-	ResizeOut[OutputPos.xy] = LinearPackToBGR(ResizeSingle(OutputPos.xy));
 }
 
 //

@@ -30,8 +30,6 @@ call :fxc ResizePassH            || exit /b 1
 call :fxc ResizePassV            || exit /b 1
 call :fxc ResizeLinearPassH      || exit /b 1
 call :fxc ResizeLinearPassV      || exit /b 1
-call :fxc ResizeSinglePass       || exit /b 1
-call :fxc ResizeSingleLinearPass || exit /b 1
 call :fxc ConvertSinglePass      || exit /b 1
 call :fxc ConvertPass1           || exit /b 1
 call :fxc ConvertPass2           || exit /b 1

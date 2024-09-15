@@ -14,9 +14,8 @@ typedef struct
 
 	ID3D11ShaderResourceView* InputViewIn;
 	ID3D11UnorderedAccessView* OutputViewOut;
-	ID3D11ShaderResourceView* FancyViewIn;
-	ID3D11UnorderedAccessView* FancyViewOut;
-	ID3D11ComputeShader* SinglePass;
+	ID3D11ShaderResourceView* MiddleViewIn;
+	ID3D11UnorderedAccessView* MiddleViewOut;
 	ID3D11ComputeShader* PassH;
 	ID3D11ComputeShader* PassV;
 	uint32_t InputWidth;
@@ -43,9 +42,6 @@ static void TexResize_Dispatch(TexResize* Resize, ID3D11DeviceContext* Context);
 #include "shaders/ResizeLinearPassH.h"
 #include "shaders/ResizeLinearPassV.h"
 
-#include "shaders/ResizeSinglePass.h"
-#include "shaders/ResizeSingleLinearPass.h"
-
 void TexResize_Create(TexResize* Resize, ID3D11Device* Device, uint32_t InputWidth, uint32_t InputHeight, uint32_t OutputWidth, uint32_t OutputHeight, bool LinearSpace, D3D11_BIND_FLAG InputUsage)
 {
 	D3D11_TEXTURE2D_DESC InputTextureDesc =
@@ -68,6 +64,22 @@ void TexResize_Create(TexResize* Resize, ID3D11Device* Device, uint32_t InputWid
 	}
 	else
 	{
+		ID3DBlob* Shader;
+
+		HR(D3DDecompressShaders(
+			LinearSpace ? ResizeLinearPassHShaderBytes : ResizePassHShaderBytes,
+			LinearSpace ? sizeof(ResizeLinearPassHShaderBytes) : sizeof(ResizePassHShaderBytes),
+			1, 0, NULL, 0, &Shader, NULL));
+		ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Resize->PassH);
+		ID3D10Blob_Release(Shader);
+
+		HR(D3DDecompressShaders(
+			LinearSpace ? ResizeLinearPassVShaderBytes : ResizePassVShaderBytes,
+			LinearSpace ? sizeof(ResizeLinearPassVShaderBytes) : sizeof(ResizePassVShaderBytes),
+			1, 0, NULL, 0, &Shader, NULL));
+		ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Resize->PassV);
+		ID3D10Blob_Release(Shader);
+
 		D3D11_SHADER_RESOURCE_VIEW_DESC ViewInDesc =
 		{
 			.Format = LinearSpace ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -98,53 +110,23 @@ void TexResize_Create(TexResize* Resize, ID3D11Device* Device, uint32_t InputWid
 		};
 		ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)Resize->OutputTexture, &ViewOutDesc, &Resize->OutputViewOut);
 
-		ID3DBlob* Shader;
-
-		if (OutputWidth >= InputWidth/2 && OutputHeight >= InputHeight/2)
+		D3D11_TEXTURE2D_DESC MiddleTextureDesc =
 		{
-			HR(D3DDecompressShaders(
-				LinearSpace ? ResizeSingleLinearPassShaderBytes : ResizeSinglePassShaderBytes,
-				LinearSpace ? sizeof(ResizeSingleLinearPassShaderBytes) : sizeof(ResizeSinglePassShaderBytes),
-				1, 0, NULL, 0, &Shader, NULL));
-			ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Resize->SinglePass);
-			ID3D10Blob_Release(Shader);
-		}
-		else
-		{
-			Resize->SinglePass = NULL;
+			.Width = OutputWidth,
+			.Height = InputHeight,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS,
+			.SampleDesc = { 1, 0 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		};
 
-			HR(D3DDecompressShaders(
-				LinearSpace ? ResizeLinearPassHShaderBytes : ResizePassHShaderBytes,
-				LinearSpace ? sizeof(ResizeLinearPassHShaderBytes) : sizeof(ResizePassHShaderBytes),
-				1, 0, NULL, 0, &Shader, NULL));
-			ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Resize->PassH);
-			ID3D10Blob_Release(Shader);
-
-			HR(D3DDecompressShaders(
-				LinearSpace ? ResizeLinearPassHShaderBytes : ResizePassVShaderBytes,
-				LinearSpace ? sizeof(ResizeLinearPassHShaderBytes) : sizeof(ResizePassVShaderBytes),
-				1, 0, NULL, 0, &Shader, NULL));
-			ID3D11Device_CreateComputeShader(Device, ID3D10Blob_GetBufferPointer(Shader), ID3D10Blob_GetBufferSize(Shader), NULL, &Resize->PassV);
-			ID3D10Blob_Release(Shader);
-
-			D3D11_TEXTURE2D_DESC FancyTextureDesc =
-			{
-				.Width = OutputWidth,
-				.Height = InputHeight,
-				.MipLevels = 1,
-				.ArraySize = 1,
-				.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS,
-				.SampleDesc = { 1, 0 },
-				.Usage = D3D11_USAGE_DEFAULT,
-				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-			};
-
-			ID3D11Texture2D* FancyTexture;
-			ID3D11Device_CreateTexture2D(Device, &FancyTextureDesc, NULL, &FancyTexture);
-			ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)FancyTexture, &ViewOutDesc, &Resize->FancyViewOut);
-			ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)FancyTexture, &ViewInDesc, &Resize->FancyViewIn);
-			ID3D11Texture2D_Release(FancyTexture);
-		}
+		ID3D11Texture2D* MiddleTexture;
+		ID3D11Device_CreateTexture2D(Device, &MiddleTextureDesc, NULL, &MiddleTexture);
+		ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)MiddleTexture, &ViewInDesc, &Resize->MiddleViewIn);
+		ID3D11Device_CreateUnorderedAccessView(Device, (ID3D11Resource*)MiddleTexture, &ViewOutDesc, &Resize->MiddleViewOut);
+		ID3D11Texture2D_Release(MiddleTexture);
 	}
 
 	Resize->InputWidth = InputWidth;
@@ -161,20 +143,14 @@ void TexResize_Release(TexResize* Resize)
 	{
 		ID3D11ShaderResourceView_Release(Resize->InputViewIn);
 		ID3D11UnorderedAccessView_Release(Resize->OutputViewOut);
+
+		ID3D11ShaderResourceView_Release(Resize->MiddleViewIn);
+		ID3D11UnorderedAccessView_Release(Resize->MiddleViewOut);
+
 		ID3D11Texture2D_Release(Resize->OutputTexture);
 
-		if (Resize->SinglePass)
-		{
-			ID3D11ComputeShader_Release(Resize->SinglePass);
-		}
-		else
-		{
-			ID3D11ComputeShader_Release(Resize->PassH);
-			ID3D11ComputeShader_Release(Resize->PassV);
-
-			ID3D11UnorderedAccessView_Release(Resize->FancyViewOut);
-			ID3D11ShaderResourceView_Release(Resize->FancyViewIn);
-		}
+		ID3D11ComputeShader_Release(Resize->PassH);
+		ID3D11ComputeShader_Release(Resize->PassV);
 	}
 }
 
@@ -185,26 +161,15 @@ void TexResize_Dispatch(TexResize* Resize, ID3D11DeviceContext* Context)
 		return;
 	}
 
-	if (Resize->SinglePass)
-	{
-		ID3D11DeviceContext_ClearState(Context);
-		ID3D11DeviceContext_CSSetShader(Context, Resize->SinglePass, NULL, 0);
-		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Resize->InputViewIn);
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Resize->OutputViewOut, NULL);
-		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Resize->OutputWidth, 16), DIV_ROUND_UP(Resize->OutputHeight, 16), 1);
-	}
-	else
-	{
-		ID3D11DeviceContext_ClearState(Context);
-		ID3D11DeviceContext_CSSetShader(Context, Resize->PassH, NULL, 0);
-		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Resize->InputViewIn);
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Resize->FancyViewOut, NULL);
-		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Resize->OutputWidth, 16), DIV_ROUND_UP(Resize->InputHeight, 16), 1);
+	ID3D11DeviceContext_ClearState(Context);
+	ID3D11DeviceContext_CSSetShader(Context, Resize->PassH, NULL, 0);
+	ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Resize->InputViewIn);
+	ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Resize->MiddleViewOut, NULL);
+	ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Resize->OutputWidth, 16), DIV_ROUND_UP(Resize->InputHeight, 16), 1);
 
-		ID3D11DeviceContext_ClearState(Context);
-		ID3D11DeviceContext_CSSetShader(Context, Resize->PassV, NULL, 0);
-		ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Resize->FancyViewIn);
-		ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Resize->OutputViewOut, NULL);
-		ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Resize->OutputWidth, 16), DIV_ROUND_UP(Resize->OutputHeight, 16), 1);
-	}
+	ID3D11DeviceContext_ClearState(Context);
+	ID3D11DeviceContext_CSSetShader(Context, Resize->PassV, NULL, 0);
+	ID3D11DeviceContext_CSSetShaderResources(Context, 0, 1, &Resize->MiddleViewIn);
+	ID3D11DeviceContext_CSSetUnorderedAccessViews(Context, 0, 1, &Resize->OutputViewOut, NULL);
+	ID3D11DeviceContext_Dispatch(Context, DIV_ROUND_UP(Resize->OutputWidth, 16), DIV_ROUND_UP(Resize->OutputHeight, 16), 1);
 }
