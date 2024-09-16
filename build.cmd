@@ -34,6 +34,8 @@ call :fxc ConvertSinglePass      || exit /b 1
 call :fxc ConvertPass1           || exit /b 1
 call :fxc ConvertPass2           || exit /b 1
 
+for /f %%i in ('call git describe --always --dirty') do set CL=%CL% -DWCAP_GIT_INFO=\"%%i\"
+
 rc.exe /nologo wcap.rc || exit /b 1
 cl.exe /nologo /W3 /WX wcap.c wcap.res /link /INCREMENTAL:NO /MANIFEST:EMBED /MANIFESTINPUT:wcap.manifest /SUBSYSTEM:WINDOWS /FIXED /merge:_RDATA=.rdata || exit /b 1
 del *.obj *.res >nul

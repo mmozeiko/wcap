@@ -16,6 +16,12 @@
 #define WCAP_TITLE L"wcap"
 #define WCAP_URL   L"https://github.com/mmozeiko/wcap"
 
+#if defined(WCAP_GIT_INFO)
+#	define WCAP_CONFIG_TITLE "wcap, " __DATE__ " [" WCAP_GIT_INFO "]"
+#else
+#	define WCAP_CONFIG_TITLE "wcap, " __DATE__
+#endif
+
 #ifdef _DEBUG
 #define Assert(Cond) do { if (!(Cond)) __debugbreak(); } while (0)
 #else

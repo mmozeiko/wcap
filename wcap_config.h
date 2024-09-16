@@ -1035,7 +1035,7 @@ BOOL Config_ShowDialog(Config* C)
 
 	Config__DialogLayout Dialog = (Config__DialogLayout)
 	{
-		.Title = "wcap Settings",
+		.Title = WCAP_CONFIG_TITLE,
 		.Font = "Segoe UI",
 		.FontSize = 9,
 		.Groups = (Config__DialogGroup[])
@@ -1071,14 +1071,14 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "&Gamma Correct Resize",               ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
-					{ "&Improved Color Conversion (BETA)",   ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
-					{ "Codec",                               ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
-					{ "Profile",                             ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
-					{ "Max &Width",                          ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
-					{ "Max &Height",                         ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
-					{ "Max &Framerate",                      ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
-					{ "Bitrate (kbit/s)",                    ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
+					{ "&Gamma Correct Resize",      ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
+					{ "&Improved Color Conversion", ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
+					{ "Codec",                      ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
+					{ "Profile",                    ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
+					{ "Max &Width",                 ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
+					{ "Max &Height",                ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
+					{ "Max &Framerate",             ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
+					{ "Bitrate (kbit/s)",           ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},
