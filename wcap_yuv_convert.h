@@ -28,10 +28,18 @@ typedef struct
 }
 YuvConvert;
 
+typedef enum
+{
+	YuvColorSpace_BT601,
+	YuvColorSpace_BT709,
+	YuvColorSpace_BT2020,
+}
+YuvColorSpace;
+
 static void YuvConvertOutput_Create(YuvConvertOutput* Output, ID3D11Device* Device, uint32_t Width, uint32_t Height, DXGI_FORMAT Format);
 static void YuvConvertOutput_Release(YuvConvertOutput* Output);
 
-static void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, bool IsHD, bool ImprovedConversion);
+static void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, YuvColorSpace ColorSpace, bool ImprovedConversion);
 static void YuvConvert_Release(YuvConvert* Convert);
 
 static void YuvConvert_Dispatch(YuvConvert* Convert, ID3D11DeviceContext* Context, YuvConvertOutput* Output);
@@ -96,7 +104,7 @@ void YuvConvertOutput_Release(YuvConvertOutput* Output)
 	ID3D11ShaderResourceView_Release(Output->ViewInUV);
 }
 
-void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, bool IsHD, bool ImprovedConversion)
+void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2D* InputTexture, uint32_t Width, uint32_t Height, YuvColorSpace ColorSpace, bool ImprovedConversion)
 {
 	Assert(Width % 2 == 0 && Height % 2 == 0);
 
@@ -108,8 +116,21 @@ void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2
 	};
 	ID3D11Device_CreateShaderResourceView(Device, (ID3D11Resource*)InputTexture, &InputViewDesc, &Convert->InputView);
 
+	// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.2020_conversion
+	static const float BT2020[6][4] =
+	{
+		// RGB to YUV
+		{ +0.26270f, +0.678000f, +0.0593000f },
+		{ -0.13963f, -0.360370f, +0.5000000f },
+		{ +0.50000f, -0.459786f, -0.0402143f },
+		// YUV to RGB
+		{ 1.f, +0.000000f, +1.474600f },
+		{ 1.f, -0.164553f, -0.571353f },
+		{ 1.f, +1.881400f, +0.000000f },
+	};
+
 	// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.709_conversion
-	static const float BT709[7][4] =
+	static const float BT709[6][4] =
 	{
 		// RGB to YUV
 		{ +0.2126f, +0.7152f, +0.0722f },
@@ -120,8 +141,9 @@ void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2
 		{ 1.f, -0.1873f, -0.4681f },
 		{ 1.f, +1.8556f, +0.0000f },
 	};
+
 	// https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.601_conversion
-	static const float BT601[7][4] =
+	static const float BT601[6][4] =
 	{
 		// RGB to YUV
 		{ +0.299000f, +0.587000f, +0.114000f },
@@ -133,16 +155,25 @@ void YuvConvert_Create(YuvConvert* Convert, ID3D11Device* Device, ID3D11Texture2
 		{ 1.f, +1.772000f, +0.000000f },
 	};
 
+	const float (*ConvertMatrix)[4];
+	switch (ColorSpace)
+	{
+	case YuvColorSpace_BT601:  ConvertMatrix = BT601;  break;
+	case YuvColorSpace_BT709:  ConvertMatrix = BT709;  break;
+	case YuvColorSpace_BT2020: ConvertMatrix = BT2020; break;
+	default: Assert(false);
+	}
+
 	D3D11_BUFFER_DESC ConstantBufferDesc =
 	{
-		.ByteWidth = IsHD ? sizeof(BT709) : sizeof(BT601),
+		.ByteWidth = 6 * 4 * sizeof(float),
 		.Usage = D3D11_USAGE_IMMUTABLE,
 		.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
 	};
 
 	D3D11_SUBRESOURCE_DATA ConstantBufferData =
 	{
-		.pSysMem = IsHD ? BT709 : BT601,
+		.pSysMem = ConvertMatrix,
 	};
 
 	ID3D11Device_CreateBuffer(Device, &ConstantBufferDesc, &ConstantBufferData, &Convert->ConstantBuffer);
