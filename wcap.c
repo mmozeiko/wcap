@@ -92,6 +92,7 @@ static BOOL gRecordingStarted;
 static BOOL gRecording;
 static DWORD gRecordingLimitFramerate;
 static DWORD gRecordingDroppedFrames;
+static UINT64 gRecordingLastFrame;
 static UINT64 gRecordingNextEncode;
 static UINT64 gRecordingNextTooltip;
 static EXECUTION_STATE gRecordingState;
@@ -256,6 +257,7 @@ static void StartRecording(ID3D11Device* Device, HWND Window)
 
 	gRecordingNextTooltip = 0;
 	gRecordingNextEncode = 0;
+	gRecordingLastFrame = 0;
 	gRecordingDroppedFrames = 0;
 	ScreenCapture_Start(&gCapture, gConfig.MouseCursor, gConfig.ShowRecordingBorder);
 
@@ -1279,6 +1281,13 @@ static bool OnCaptureFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame)
 			gRecordingNextEncode += gTickFreq.QuadPart;
 		}
 	}
+
+	// ignore frames if it comes from the past
+	if (Frame->Time <= gRecordingLastFrame)
+	{
+		DoEncode = FALSE;
+	}
+	gRecordingLastFrame = Frame->Time;
 
 	if (DoEncode)
 	{
