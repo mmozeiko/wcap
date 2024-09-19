@@ -40,12 +40,6 @@ Make sure your GPU drivers are updated if something is not working with hardware
 is enabled, you can disable it in settings. Then video will be encoded using [Microsoft Media Foundation H264][MSMFH264]
 software encoder. You might want to explicitly use software encoder on older GPU's as their hardware encoder quality is not great.
 
-H265 encoding might require installing HEVC package from Microsoft Store - copy following link into Explorer address bar,
-or in Start->Run dialog:
-```
-windows-store://pdp/?ProductId=9n4wgh0z6vhq
-```
-
 Audio is captured using [WASAPI loopback recording][] and encoded using [Microsoft Media Foundation AAC][MSMFAAC] encoder, or
 undocumented Media Foundation FLAC encoder (it seems it always is present in Windows 10).
 
@@ -63,6 +57,16 @@ dropped frames during recording, try reducing video resolution and framerate.
 Capture of mouse cursor can be disabled only when using Windows 10 version 2004, May 2020 Update (20H1) or newer.
 
 On Windows 11 you can disable yellow recording borders, or rounded window corners.
+
+HEVC Software Encoding
+======================
+
+HEVC encoding in software (on CPU) will require installing HEVC Video Extensions from Windows Store. It will support only
+8-bit encoding. You can get direct download to installer package without using Windows Store with following steps:
+
+1) open https://store.rg-adguard.net/
+2) search `https://www.microsoft.com/store/productId/9n4wgh0z6vhq` for `Retail` channel
+3) download & run .appxbundle package it gives you
 
 Creating gif from mp4
 =====================
