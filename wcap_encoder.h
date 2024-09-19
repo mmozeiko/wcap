@@ -248,11 +248,6 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	HR(ID3D11DeviceContext_QueryInterface(Context, &IID_ID3D11Multithread, &Multithread));
 	ID3D11Multithread_SetMultithreadProtected(Multithread, TRUE);
 
-	UINT Token;
-	IMFDXGIDeviceManager* Manager;
-	HR(MFCreateDXGIDeviceManager(&Token, &Manager));
-	HR(IMFDXGIDeviceManager_ResetDevice(Manager, (IUnknown*)Device, Token));
-
 	DWORD InputWidth = Config->Width;
 	DWORD InputHeight = Config->Height;
 	DWORD OutputWidth = Config->Config->VideoMaxWidth;
@@ -375,8 +370,18 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	{
 		IMFAttributes* Attributes;
 		HR(MFCreateAttributes(&Attributes, 4));
-		HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, Config->Config->HardwareEncoder));
-		HR(IMFAttributes_SetUnknown(Attributes, &MF_SINK_WRITER_D3D_MANAGER, (IUnknown*)Manager));
+		if (Config->Config->HardwareEncoder)
+		{
+			HR(IMFAttributes_SetUINT32(Attributes, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE));
+
+			UINT Token;
+			IMFDXGIDeviceManager* Manager;
+			HR(MFCreateDXGIDeviceManager(&Token, &Manager));
+			HR(IMFDXGIDeviceManager_ResetDevice(Manager, (IUnknown*)Device, Token));
+			HR(IMFAttributes_SetUnknown(Attributes, &MF_SINK_WRITER_D3D_MANAGER, (IUnknown*)Manager));
+
+			IMFDXGIDeviceManager_Release(Manager);
+		}
 		HR(IMFAttributes_SetUINT32(Attributes, &MF_SINK_WRITER_DISABLE_THROTTLING, TRUE));
 		HR(IMFAttributes_SetGUID(Attributes, &MF_TRANSCODE_CONTAINERTYPE, Container));
 
@@ -662,7 +667,6 @@ bail:
 
 	ID3D11Multithread_Release(Multithread);
 	ID3D11DeviceContext_Release(Context);
-	IMFDXGIDeviceManager_Release(Manager);
 
 	return Result;
 }
