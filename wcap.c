@@ -37,8 +37,10 @@
 #pragma comment (lib, "OneCore")
 #pragma comment (lib, "CoreMessaging")
 
+#if defined(_M_AMD64)
 // this is needed to be able to use Nvidia Media Foundation encoders on Optimus systems
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
+#endif
 
 #define WM_WCAP_ALREADY_RUNNING (WM_USER+1)
 #define WM_WCAP_STOP_CAPTURE    (WM_USER+2)

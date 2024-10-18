@@ -3,8 +3,12 @@ name: wcap
 on:
   push:
     branches: main
+    paths-ignore:
+      - '**/README.md'
   pull_request:
     branches: main
+    paths-ignore:
+      - '**/README.md'
 
 jobs:
   build:
@@ -12,26 +16,31 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: repo
 
-      - name: Build
+      - name: Build (x64)
         shell: cmd
-        run: cd repo && build.cmd
+        run: cd repo && build.cmd x64
+
+      - name: Build (arm64)
+        shell: cmd
+        run: cd repo && build.cmd arm64
 
       - name: Checkout wiki
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         with:
           repository: ${{github.repository}}.wiki
           path: wiki
 
-      - name: Upload binary
+      - name: Upload binaries
         if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         shell: cmd
         run: |
-          copy repo\wcap.exe wiki
+          copy repo\wcap-x64.exe   wiki
+          copy repo\wcap-arm64.exe wiki
 
           cd wiki
           git config --local user.email "action@github.com"

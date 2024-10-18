@@ -3,7 +3,7 @@ wcap
 
 Simple and efficient screen recording utility for Windows.
 
-Get latest binary here: [wcap.exe][]
+Get latest binary here: [wcap-x64.exe][] or [wcap-arm64.exe][]
 
 **WARNING**: Windows Defender or other AV software might report false positive detection
 
@@ -36,12 +36,12 @@ little CPU and memory.
 You can choose in settings to capture only client area or full size of window - client area will not include title bar and
 borders for standard windows style. Recorded video size is determined by initial window size.
 
-Make sure your GPU drivers are updated if something is not working with hardware video encoding - by default hardware encoder
-is enabled, you can disable it in settings. Then video will be encoded using [Microsoft Media Foundation H264][MSMFH264]
+By default hardware encoder is enabled, you can disable it in settings Make sure your GPU drivers are updated if something is
+not working with hardware video encoding. Then video will be encoded using [Microsoft Media Foundation H264][MSMFH264]
 software encoder. You might want to explicitly use software encoder on older GPU's as their hardware encoder quality is not great.
 
 Audio is captured using [WASAPI loopback recording][] and encoded using [Microsoft Media Foundation AAC][MSMFAAC] encoder, or
-undocumented Media Foundation FLAC encoder (it seems it always is present in Windows 10).
+undocumented Media Foundation FLAC encoder (it seems it always is present in Windows 10 and 11).
 
 Recorded mp4 file can be set to use fragmented mp4 format in settings (only for H264 codec). Fragmented mp4 file does not
 require "finalizing" it. Which means that in case application or GPU driver crashes or if you run out of disk space then
@@ -62,7 +62,7 @@ HEVC Software Encoding
 ======================
 
 HEVC encoding in software (on CPU) will require installing HEVC Video Extensions from Windows Store. It will support only
-8-bit encoding. You can get direct download to installer package without using Windows Store with following steps:
+8-bit encoding. You can get direct download to installer package without using Windows Store application with following steps:
 
 1) open https://store.rg-adguard.net/
 2) search `https://www.microsoft.com/store/productId/9n4wgh0z6vhq` for `Retail` channel
@@ -96,7 +96,8 @@ This is free and unencumbered software released into the public domain.
 Anyone is free to copy, modify, publish, use, compile, sell, or distribute this software, either in source code form or as
 a compiled binary, for any purpose, commercial or non-commercial, and by any means.
 
-[wcap.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap.exe
+[wcap-x64.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap-x64.exe
+[wcap-arm64.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap-arm64.exe
 [wgc]: https://blogs.windows.com/windowsdeveloper/2019/09/16/new-ways-to-do-screen-capture/
 [MSMFH264]: https://docs.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder
 [VS]: https://visualstudio.microsoft.com/vs/

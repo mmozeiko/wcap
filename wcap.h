@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <intrin.h>
+#include <stdatomic.h>
 
 #define WCAP_TITLE L"wcap"
 #define WCAP_URL   L"https://github.com/mmozeiko/wcap"

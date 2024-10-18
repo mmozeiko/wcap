@@ -39,16 +39,16 @@ typedef struct
 	TexResize Resize;
 	YuvConvert Convert;
 
-	YuvConvertOutput ConvertOutput[ENCODER_VIDEO_BUFFER_COUNT];
-	IMFSample*       VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
-	uint64_t         VideoSampleAvailable;
+	YuvConvertOutput  ConvertOutput[ENCODER_VIDEO_BUFFER_COUNT];
+	IMFSample*        VideoSample[ENCODER_VIDEO_BUFFER_COUNT];
+	_Atomic(uint64_t) VideoSampleAvailable;
 
 	BOOL   VideoDiscontinuity;
 	UINT64 VideoLastTime;
 
-	IMFTransform*   Resampler;
-	IMFSample*      AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
-	uint64_t        AudioSampleAvailable;
+	IMFTransform*     Resampler;
+	IMFSample*        AudioSample[ENCODER_AUDIO_BUFFER_COUNT];
+	_Atomic(uint64_t) AudioSampleAvailable;
 
 	IMFSample*      AudioInputSample;
 	DWORD           AudioFrameSize;
@@ -136,8 +136,8 @@ static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IM
 	{
 		if (Sample == Enc->VideoSample[Index])
 		{
-			_InterlockedOr64(&Enc->VideoSampleAvailable, 1ULL << Index);
-			WakeByAddressSingle(&Enc->VideoSampleAvailable);
+			atomic_fetch_or(&Enc->VideoSampleAvailable, 1ULL << Index);
+			WakeByAddressSingle((PVOID)&Enc->VideoSampleAvailable);
 			break;
 		}
 	}
@@ -161,8 +161,8 @@ static HRESULT STDMETHODCALLTYPE Encoder__AudioInvoke(IMFAsyncCallback* this, IM
 	{
 		if (Sample == Enc->AudioSample[Index])
 		{
-			_InterlockedOr64(&Enc->AudioSampleAvailable, 1ULL << Index);
-			WakeByAddressSingle(&Enc->AudioSampleAvailable);
+			atomic_fetch_or(&Enc->AudioSampleAvailable, 1ULL << Index);
+			WakeByAddressSingle((PVOID)&Enc->AudioSampleAvailable);
 			break;
 		}
 	}
@@ -193,12 +193,12 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 	for (;;)
 	{
 		// we don't want to drop any audio frames, so wait for available sample/buffer
-		uint64_t Available = Encoder->AudioSampleAvailable;
+		uint64_t Available = atomic_load(&Encoder->AudioSampleAvailable);
 		while (Available == 0)
 		{
 			uint64_t Zero = 0;
-			WaitOnAddress(&Encoder->AudioSampleAvailable, &Zero, sizeof(Zero), INFINITE);
-			Available = Encoder->AudioSampleAvailable;
+			WaitOnAddress((PVOID)&Encoder->AudioSampleAvailable, &Zero, sizeof(Zero), INFINITE);
+			Available = atomic_load(&Encoder->AudioSampleAvailable);
 		}
 
 		DWORD Index;
@@ -216,7 +216,7 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 		}
 		Assert(SUCCEEDED(hr));
 
-		_InterlockedAnd64(&Encoder->AudioSampleAvailable, ~(1ULL << Index));
+		atomic_fetch_and(&Encoder->AudioSampleAvailable, ~(1ULL << Index));
 
 		IMFTrackedSample* Tracked;
 		HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
@@ -361,6 +361,64 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Container = &MFTranscodeContainerType_MPEG4;
 		Codec = &MFVideoFormat_HEVC;
 		Profile = eAVEncH265VProfile_Main_420_10;
+	}
+
+	// make sure MFT video encoder exists, some vendors wrongly allow SinkWriter to be created for invalid configuration
+	{
+		bool Ok = false;
+
+		MFT_REGISTER_TYPE_INFO InputType = { MFMediaType_Video, *MediaFormatYUV };
+		MFT_REGISTER_TYPE_INFO OutputType = { MFMediaType_Video, *Codec };
+
+		IMFAttributes* EnumAttributes;
+		HR(MFCreateAttributes(&EnumAttributes, 1));
+
+		UINT32 Flags = MFT_ENUM_FLAG_SORTANDFILTER;
+
+		if (Config->Config->HardwareEncoder)
+		{
+			IDXGIDevice* DxgiDevice;
+			HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (void**)&DxgiDevice));
+
+			IDXGIAdapter* DxgiAdapter;
+			HR(IDXGIDevice_GetAdapter(DxgiDevice, &DxgiAdapter));
+			IDXGIDevice_Release(DxgiDevice);
+
+			DXGI_ADAPTER_DESC AdapterDesc;
+			IDXGIAdapter_GetDesc(DxgiAdapter, &AdapterDesc);
+			IDXGIAdapter_Release(DxgiAdapter);
+
+			HR(IMFAttributes_SetBlob(EnumAttributes, &MFT_ENUM_ADAPTER_LUID, (UINT8*)&AdapterDesc.AdapterLuid, sizeof(AdapterDesc.AdapterLuid)));
+
+			Flags |= MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_HARDWARE;
+		}
+		else
+		{
+			Flags |= MFT_ENUM_FLAG_SYNCMFT;
+		}
+
+		UINT32 ActivateCount = 0;
+		IMFActivate** Activate = NULL;
+		if (SUCCEEDED(MFTEnum2(MFT_CATEGORY_VIDEO_ENCODER, Flags, &InputType, &OutputType, EnumAttributes, &Activate, &ActivateCount)) && ActivateCount != 0)
+		{
+			Ok = true;
+		}
+
+		if (Activate)
+		{
+			for (size_t ActivateIndex = 0; ActivateIndex != ActivateCount; ActivateIndex++)
+			{
+				IMFActivate_Release(Activate[ActivateIndex]);
+			}
+			CoTaskMemFree(Activate);
+		}
+		IMFAttributes_Release(EnumAttributes);
+
+		if (!Ok)
+		{
+			MessageBoxW(NULL, L"Cannot find video encoder!", WCAP_TITLE, MB_ICONERROR);
+			goto bail;
+		}
 	}
 
 	// https://github.com/mpv-player/mpv/blob/release/0.38/video/csputils.c#L150-L153
@@ -579,9 +637,6 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		YuvColorSpace ColorSpace = IsHD ? YuvColorSpace_BT709 : YuvColorSpace_BT601;
 		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, ColorSpace, Config->Config->ImprovedColorConversion);
 
-		UINT32 Size;
-		HR(MFCalculateImageSize(MediaFormatYUV, OutputWidth, OutputHeight, &Size));
-
 		for (size_t OutputIndex = 0; OutputIndex < ENCODER_VIDEO_BUFFER_COUNT; OutputIndex++)
 		{
 			YuvConvertOutput_Create(&Encoder->ConvertOutput[OutputIndex], Device, OutputWidth, OutputHeight, ConvertFormat);
@@ -593,7 +648,10 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 			IMFMediaBuffer* Buffer;
 			HR(MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown*)ConvertOutputTexture, 0, FALSE, &Buffer));
 
-			HR(IMFMediaBuffer_SetCurrentLength(Buffer, Size));
+			UINT32 MaxLength;
+			HR(IMFMediaBuffer_GetMaxLength(Buffer, &MaxLength));
+			HR(IMFMediaBuffer_SetCurrentLength(Buffer, MaxLength));
+
 			HR(IMFSample_AddBuffer(VideoSample, Buffer));
 			IMFMediaBuffer_Release(Buffer);
 
@@ -611,7 +669,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	Encoder->VideoLastTime = 0x8000000000000000ULL; // some large time in future
 
 	Assert(ENCODER_VIDEO_BUFFER_COUNT <= 64);
-	Encoder->VideoSampleAvailable = (1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1;
+	atomic_init(&Encoder->VideoSampleAvailable, (1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1);
 
 	if (Encoder->AudioStreamIndex >= 0)
 	{
@@ -640,7 +698,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		Encoder->Resampler = Resampler;
 
 		Assert(ENCODER_AUDIO_BUFFER_COUNT <= 64);
-		Encoder->AudioSampleAvailable = (1ULL << ENCODER_AUDIO_BUFFER_COUNT) - 1;
+		atomic_init(&Encoder->AudioSampleAvailable, (1ULL << ENCODER_AUDIO_BUFFER_COUNT) - 1);
 	}
 
 	ID3D11DeviceContext_AddRef(Context);
@@ -709,7 +767,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 {
 	Encoder->VideoLastTime = Time;
 
-	uint64_t Available = Encoder->VideoSampleAvailable;
+	uint64_t Available = atomic_load(&Encoder->VideoSampleAvailable);
 	if (Available == 0)
 	{
 		// dropped frame
@@ -721,7 +779,7 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 
 	DWORD Index;
 	_BitScanForward64(&Index, Available);
-	_InterlockedAnd64(&Encoder->VideoSampleAvailable, ~(1ULL << Index));
+	atomic_fetch_and(&Encoder->VideoSampleAvailable, ~(1ULL << Index));
 
 	ID3D11DeviceContext* Context = Encoder->Context;
 	ID3D11Multithread_Enter(Encoder->Multithread);

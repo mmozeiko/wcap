@@ -25,8 +25,8 @@ typedef struct
 
 	uint8_t* Buffer;
 	uint32_t BufferSize;
-	uint32_t BufferRead;
-	uint32_t BufferWrite;
+	_Atomic(uint32_t) BufferRead;
+	_Atomic(uint32_t) BufferWrite;
 }
 AudioCapture;
 
@@ -81,7 +81,7 @@ DEFINE_GUID(IID_IActivateAudioInterfaceCompletionHandler, 0x41d949ab, 0x9862, 0x
 typedef struct
 {
 	IActivateAudioInterfaceCompletionHandler Handler;
-	uint32_t ReadyFlag;
+	_Atomic(uint32_t) ReadyFlag;
 }
 AudioCaptureActivate;
 
@@ -115,8 +115,8 @@ static HRESULT STDMETHODCALLTYPE AudioCaptureActivate__ActivateCompleted(IActiva
 {
 	AudioCaptureActivate* Activate = CONTAINING_RECORD(This, AudioCaptureActivate, Handler);
 
-	InterlockedIncrement(&Activate->ReadyFlag);
-	WakeByAddressSingle(&Activate->ReadyFlag);
+	atomic_store_explicit(&Activate->ReadyFlag, 1, memory_order_release);
+	WakeByAddressSingle((PVOID)&Activate->ReadyFlag);
 
 	return S_OK;
 }
@@ -157,7 +157,7 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 		UINT64 Timestamp = 0; // in QPC unuts
 		while (SUCCEEDED(IAudioCaptureClient_GetBuffer(CaptureClient, &Buffer, &Frames, &Flags, &Position, &Timestamp)) && Frames != 0)
 		{
-			uint32_t BufferAvailable = BufferSize - (BufferWrite - Capture->BufferRead);
+			uint32_t BufferAvailable = BufferSize - (BufferWrite - atomic_load_explicit(&Capture->BufferRead, memory_order_relaxed));
 
 			uint32_t WriteSize = sizeof(Frames) + sizeof(Position) + sizeof(Timestamp) + Frames * BytesPerFrame;
 			if (WriteSize <= BufferAvailable)
@@ -174,7 +174,9 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 				{
 					CopyMemory(BufferPtr, Buffer, Frames * BytesPerFrame);
 				}
-				BufferWrite = InterlockedAdd(&Capture->BufferWrite, WriteSize);
+
+				BufferWrite += WriteSize;
+				atomic_store_explicit(&Capture->BufferWrite, BufferWrite, memory_order_release);
 			}
 			else
 			{
@@ -225,6 +227,7 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 		{
 			.Handler.lpVtbl = &AudioCaptureActivateVtbl,
 		};
+		atomic_init(&ActivateCompletion.ReadyFlag, 0);
 
 		IActivateAudioInterfaceAsyncOperation* AsyncOperation;
 		if (FAILED(ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, &IID_IAudioClient, &Params, &ActivateCompletion.Handler, &AsyncOperation)))
@@ -232,10 +235,10 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 			return false;
 		}
 
-		while (!ActivateCompletion.ReadyFlag)
+		while (!atomic_load_explicit(&ActivateCompletion.ReadyFlag, memory_order_acquire))
 		{
 			uint32_t ReadyFlag = 0;
-			WaitOnAddress(&ActivateCompletion.ReadyFlag, &ReadyFlag, sizeof(ReadyFlag), INFINITE);
+			WaitOnAddress((PVOID)&ActivateCompletion.ReadyFlag, &ReadyFlag, sizeof(ReadyFlag), INFINITE);
 		}
 
 		HRESULT ActivateResult;
@@ -375,8 +378,8 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 
 		Capture->Buffer = View1;
 		Capture->BufferSize = BufferSize;
-		Capture->BufferRead = 0;
-		Capture->BufferWrite = 0;
+		atomic_init(&Capture->BufferRead, 0);
+		atomic_init(&Capture->BufferWrite, 0);
 
 		Capture->Stop = false;
 
@@ -438,13 +441,14 @@ bool AudioCapture_GetData(AudioCapture* Capture, AudioCaptureData* Data, uint64_
 	uint64_t Position;
 	uint64_t Timestamp;
 
-	uint32_t AvailableSize = Capture->BufferWrite - Capture->BufferRead;
+	uint32_t BufferRead = atomic_load_explicit(&Capture->BufferRead, memory_order_relaxed);
+	uint32_t AvailableSize = atomic_load_explicit(&Capture->BufferWrite, memory_order_acquire) - BufferRead;
 	if (AvailableSize < sizeof(Frames) + sizeof(Position) + sizeof(Timestamp))
 	{
 		return false;
 	}
 
-	uint8_t* BufferPtr = Capture->Buffer + (Capture->BufferRead & (Capture->BufferSize - 1));
+	uint8_t* BufferPtr = Capture->Buffer + (BufferRead & (Capture->BufferSize - 1));
 	CopyMemory(&Frames, BufferPtr, sizeof(Frames)); BufferPtr += sizeof(Frames);
 	CopyMemory(&Position, BufferPtr, sizeof(Position)); BufferPtr += sizeof(Position);
 	CopyMemory(&Timestamp, BufferPtr, sizeof(Timestamp)); BufferPtr += sizeof(Timestamp);
@@ -490,6 +494,6 @@ bool AudioCapture_GetData(AudioCapture* Capture, AudioCaptureData* Data, uint64_
 void AudioCapture_ReleaseData(AudioCapture* Capture, AudioCaptureData* Data)
 {
 	uint32_t ReadSize = (uint32_t)(sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint64_t) + Data->Count * Capture->Format->nBlockAlign);
-	Assert(ReadSize <= Capture->BufferWrite - Capture->BufferRead);
-	InterlockedAdd(&Capture->BufferRead, ReadSize);
+	Assert(ReadSize <= atomic_load_explicit(&Capture->BufferWrite, memory_order_relaxed) - atomic_load_explicit(&Capture->BufferRead, memory_order_relaxed));
+	atomic_fetch_add_explicit(&Capture->BufferRead, ReadSize, memory_order_release);
 }
