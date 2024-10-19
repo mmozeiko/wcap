@@ -1,6 +1,10 @@
 Changelog
 =========
 
+##### 2024.10.18
+ * add native arm64 Windows support
+ * add AV1 codec for encoding - 8-bit and 10-bit main profile
+
 ##### 2024.09.15
  * record application local audio for window capture (Windows 10 "20H1" and up)
  * allow to disable yellow capture border indicator (Windows 11)

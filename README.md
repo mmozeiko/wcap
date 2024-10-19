@@ -15,7 +15,7 @@ Features
  * press <kbd>Ctrl + Shift + PrintScreen</kbd> to select & record fixed region on current monitor
  * press any of previous combinations to stop recording
  * right or double-click on tray icon to change settings
- * video encoded using [H264/AVC][] or [H265/HEVC][], with 10-bit support for HEVC
+ * video encoded using [H264/AVC][], [H265/HEVC][] or [AV1][], with 10-bit support for HEVC and AV1
  * audio encoded using [AAC][] or [FLAC][]
  * for window capture record full window area (including title bar/borders) or just the client area
  * window capture can record **application local audio**, no other system/process audio included
@@ -107,5 +107,6 @@ a compiled binary, for any purpose, commercial or non-commercial, and by any mea
 [paletteuse]: https://ffmpeg.org/ffmpeg-filters.html#paletteuse
 [H264/AVC]: https://en.wikipedia.org/wiki/Advanced_Video_Coding
 [H265/HEVC]: https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding
+[AV1]: https://en.wikipedia.org/wiki/AV1
 [AAC]: https://en.wikipedia.org/wiki/Advanced_Audio_Coding
 [FLAC]: https://en.wikipedia.org/wiki/FLAC

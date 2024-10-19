@@ -331,43 +331,52 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	const GUID* Container;
 	const GUID* Codec;
 	UINT32 Profile;
-	const GUID* MediaFormatYUV;
-	DXGI_FORMAT ConvertFormat;
+	const GUID* VideoInputFormat;
 	if (Config->Config->VideoCodec == CONFIG_VIDEO_H264)
 	{
-		MediaFormatYUV = &MFVideoFormat_NV12;
-		ConvertFormat = DXGI_FORMAT_NV12;
-
+		VideoInputFormat = &MFVideoFormat_NV12;
 		Container = Config->Config->FragmentedOutput ? &MFTranscodeContainerType_FMPEG4 : &MFTranscodeContainerType_MPEG4;
 		Codec = &MFVideoFormat_H264;
 		Profile = ((UINT32[]) { eAVEncH264VProfile_Base, eAVEncH264VProfile_Main, eAVEncH264VProfile_High })[Config->Config->VideoProfile];
-
 	}
 	else if (Config->Config->VideoCodec == CONFIG_VIDEO_H265 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN)
 	{
-		MediaFormatYUV = &MFVideoFormat_NV12;
-		ConvertFormat = DXGI_FORMAT_NV12;
-
+		VideoInputFormat = &MFVideoFormat_NV12;
 		Container = &MFTranscodeContainerType_MPEG4;
 		Codec = &MFVideoFormat_HEVC;
 		Profile = eAVEncH265VProfile_Main_420_8;
-
 	}
-	else // Config->Config->VideoCodec == CONFIG_VIDEO_H265 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN_10
+	else if (Config->Config->VideoCodec == CONFIG_VIDEO_H265 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN_10)
 	{
-		MediaFormatYUV = &MFVideoFormat_P010;
-		ConvertFormat = DXGI_FORMAT_P010;
-
+		VideoInputFormat = &MFVideoFormat_P010;
 		Container = &MFTranscodeContainerType_MPEG4;
 		Codec = &MFVideoFormat_HEVC;
 		Profile = eAVEncH265VProfile_Main_420_10;
+	}
+	else if (Config->Config->VideoCodec == CONFIG_VIDEO_AV1 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN)
+	{
+		VideoInputFormat = &MFVideoFormat_NV12;
+		Container = &MFTranscodeContainerType_MPEG4;
+		Codec = &MFVideoFormat_AV1;
+		Profile = eAVEncAV1VProfile_Main_420_8;
+	}
+	else if (Config->Config->VideoCodec == CONFIG_VIDEO_AV1 && Config->Config->VideoProfile == CONFIG_VIDEO_MAIN_10)
+	{
+		VideoInputFormat = &MFVideoFormat_P010;
+		Container = &MFTranscodeContainerType_MPEG4;
+		Codec = &MFVideoFormat_AV1;
+		Profile = eAVEncAV1VProfile_Main_420_10;
+	}
+	else
+	{
+		Assert(0);
 	}
 
 	// make sure MFT video encoder exists, some vendors wrongly allow SinkWriter to be created for invalid configuration
 	{
 		bool Ok = false;
 
-		MFT_REGISTER_TYPE_INFO InputType = { MFMediaType_Video, *MediaFormatYUV };
+		MFT_REGISTER_TYPE_INFO InputType = { MFMediaType_Video, *VideoInputFormat };
 		MFT_REGISTER_TYPE_INFO OutputType = { MFMediaType_Video, *Codec };
 
 		IMFAttributes* EnumAttributes;
@@ -422,7 +431,9 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	}
 
 	// https://github.com/mpv-player/mpv/blob/release/0.38/video/csputils.c#L150-L153
-	bool IsHD = (OutputWidth >= 1280) || (OutputHeight > 576) || Config->Config->VideoCodec == CONFIG_VIDEO_H265;
+	bool IsHD = (OutputWidth >= 1280) || (OutputHeight > 576)
+		|| Config->Config->VideoCodec == CONFIG_VIDEO_H265
+		|| Config->Config->VideoCodec == CONFIG_VIDEO_AV1;
 
 	// output file
 	{
@@ -486,7 +497,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		IMFMediaType* Type;
 		HR(MFCreateMediaType(&Type));
 		HR(IMFMediaType_SetGUID(Type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video));
-		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, MediaFormatYUV));
+		HR(IMFMediaType_SetGUID(Type, &MF_MT_SUBTYPE, VideoInputFormat));
 		HR(IMFMediaType_SetUINT32(Type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_RATE, MFT64(Config->FramerateNum, Config->FramerateDen)));
 		HR(IMFMediaType_SetUINT64(Type, &MF_MT_FRAME_SIZE, MFT64(OutputWidth, OutputHeight)));
@@ -636,6 +647,8 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	{
 		YuvColorSpace ColorSpace = IsHD ? YuvColorSpace_BT709 : YuvColorSpace_BT601;
 		YuvConvert_Create(&Encoder->Convert, Device, Encoder->Resize.OutputTexture, OutputWidth, OutputHeight, ColorSpace, Config->Config->ImprovedColorConversion);
+
+		DXGI_FORMAT ConvertFormat = IsEqualGUID(VideoInputFormat, &MFVideoFormat_NV12) ? DXGI_FORMAT_NV12 : DXGI_FORMAT_P010;
 
 		for (size_t OutputIndex = 0; OutputIndex < ENCODER_VIDEO_BUFFER_COUNT; OutputIndex++)
 		{
