@@ -557,11 +557,10 @@ static void CaptureRegionInit(void)
 	InvalidateRect(gWindow, NULL, FALSE);
 }
 
-static void CaptureRegionDone(void)
+static void CaptureRegionRelease(void)
 {
-	ShowWindow(gWindow, SW_HIDE);
-	SetCursor(gCursorArrow);
-	ReleaseCapture();
+	SetWindowPos(gWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE);
+	SetWindowLongW(gWindow, GWL_EXSTYLE, 0);
 
 	if (gRectContext)
 	{
@@ -577,6 +576,14 @@ static void CaptureRegionDone(void)
 		DeleteObject(gRectDarkBitmap);
 		gRectDarkBitmap = NULL;
 	}
+}
+
+static void CaptureRegionDone(void)
+{
+	SetCursor(gCursorArrow);
+	ReleaseCapture();
+
+	CaptureRegionRelease();
 }
 
 static void CaptureRegion(void)
@@ -598,26 +605,35 @@ static void CaptureRegion(void)
 	SetWindowLongW(gWindow, GWL_EXSTYLE, ExStyle);
 	SetLayeredWindowAttributes(gWindow, RGB(255, 0, 255), 0, LWA_COLORKEY);
 
-	int X = Info.rcMonitor.left + Rect.left - (WCAP_RECT_BORDER + 1);
-	int Y = Info.rcMonitor.top + Rect.top - (WCAP_RECT_BORDER + 1);
-	int W = Rect.right - Rect.left + 2 * (WCAP_RECT_BORDER + 1);
-	int H = Rect.bottom - Rect.top + 2 * (WCAP_RECT_BORDER + 1);
-	SetWindowPos(gWindow, HWND_TOPMOST, X, Y, W, H, SWP_SHOWWINDOW);
-	InvalidateRect(gWindow, NULL, FALSE);
-
 	ID3D11Device* Device = CreateDevice();
 	if (!Device)
 	{
+		CaptureRegionRelease();
 		return;
 	}
 
 	if (!ScreenCapture_CreateForMonitor(&gCapture, Device, gRectMonitor, &Rect))
 	{
 		ShowNotification(L"Cannot record monitor!", L"Error", NIIF_WARNING);
+		CaptureRegionRelease();
 		return;
 	}
 
 	StartRecording(Device, NULL);
+
+	if (gRecording)
+	{
+		int X = Info.rcMonitor.left + Rect.left - (WCAP_RECT_BORDER + 1);
+		int Y = Info.rcMonitor.top + Rect.top - (WCAP_RECT_BORDER + 1);
+		int W = Rect.right - Rect.left + 2 * (WCAP_RECT_BORDER + 1);
+		int H = Rect.bottom - Rect.top + 2 * (WCAP_RECT_BORDER + 1);
+		SetWindowPos(gWindow, HWND_TOPMOST, X, Y, W, H, SWP_SHOWWINDOW);
+		InvalidateRect(gWindow, NULL, FALSE);
+	}
+	else
+	{
+		CaptureRegionRelease();
+	}
 }
 
 static int GetPointResize(int X, int Y)
