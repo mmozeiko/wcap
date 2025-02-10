@@ -1006,7 +1006,7 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	WritePrivateProfileStringW(INI_SECTION, L"ShowRecordingBorder",      C->ShowRecordingBorder      ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"KeepRoundedWindowCorners", C->KeepRoundedWindowCorners ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",          C->HardwareEncoder          ? L"1" : L"0", FileName);
-	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegratged",C->HardwarePreferIntegrated ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegrated", C->HardwarePreferIntegrated ? L"1" : L"0", FileName);
 	// output
 	WritePrivateProfileStringW(INI_SECTION, L"OutputFolder",      C->OutputFolder, FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"OpenFolder",        C->OpenFolder        ? L"1" : L"0", FileName);
