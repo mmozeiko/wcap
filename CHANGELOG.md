@@ -1,6 +1,10 @@
 Changelog
 =========
 
+##### 2025.02.10
+ * fix border still showing when cannot start region capture
+ * fix typo when saving config
+
 ##### 2024.10.18
  * add native arm64 Windows support
  * add AV1 codec for encoding - 8-bit and 10-bit main profile
