@@ -4,7 +4,7 @@
 #include <d3d11.h>
 #include <dwmapi.h>
 
-#define WINDOWS_FOUNDATION_UNIVERSALAPICONTRACT_VERSION 0xc0000
+#define WINDOWS_FOUNDATION_UNIVERSALAPICONTRACT_VERSION 0x130000
 #include <windows.graphics.capture.h>
 
 typedef struct IGraphicsCaptureItemInterop IGraphicsCaptureItemInterop;
@@ -156,6 +156,7 @@ extern __declspec(dllimport) HRESULT WINAPI CreateDirect3D11DeviceFromDXGIDevice
 DEFINE_GUID(IID_IClosable,                           0x30d5a829, 0x7fa4, 0x4026, 0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e);
 DEFINE_GUID(IID_IGraphicsCaptureSession2,            0x2c39ae40, 0x7d2e, 0x5044, 0x80, 0x4e, 0x8b, 0x67, 0x99, 0xd4, 0xcf, 0x9e);
 DEFINE_GUID(IID_IGraphicsCaptureSession3,            0xf2cdd966, 0x22ae, 0x5ea1, 0x95, 0x96, 0x3a, 0x28, 0x93, 0x44, 0xc3, 0xbe);
+DEFINE_GUID(IID_IGraphicsCaptureSession5,            0x67c0ea62, 0x1f85, 0x5061, 0x92, 0x5a, 0x23, 0x9b, 0xe0, 0xac, 0x09, 0xcb);
 DEFINE_GUID(IID_IGraphicsCaptureItemInterop,         0x3628e81b, 0x3cac, 0x4c60, 0xb7, 0xf4, 0x23, 0xce, 0x0e, 0x0c, 0x33, 0x56);
 DEFINE_GUID(IID_IGraphicsCaptureItem,                0x79c3f95b, 0x31f7, 0x4ec2, 0xa4, 0x64, 0x63, 0x2e, 0xf5, 0xd3, 0x07, 0x60);
 DEFINE_GUID(IID_IGraphicsCaptureItemHandler,         0xe9c610c0, 0xa68c, 0x5bd9, 0x80, 0x21, 0x85, 0x89, 0x34, 0x6e, 0xee, 0xe2);
@@ -335,7 +336,7 @@ bool ScreenCapture_CanHideRecordingBorder(void)
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
 	RtlGetVersion(&Version);
 
-	// available since Windows 11, build 10.0.22000.0
+	// available since Windows 11 21H2, build 10.0.22000.0
 	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 22000);
 }
 
@@ -344,7 +345,7 @@ bool ScreenCapture_CanDisableRoundedCorners(void)
 	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
 	RtlGetVersion(&Version);
 
-	// available since Windows 11, build 10.0.22000.0
+	// available since Windows 11 21H2, build 10.0.22000.0
 	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 22000);
 }
 
@@ -513,6 +514,16 @@ void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool With
 	{
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession3_put_IsBorderRequired(Session3, (boolean)WithRecordingBorder);
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession3_Release(Session3);
+	}
+
+	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession5* Session5;
+	if (SUCCEEDED(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Session, &IID_IGraphicsCaptureSession5, (void**)&Session5)))
+	{
+		// TimeSpan value is in 100ns units
+		// min duration supported by API is 1msec, this means max supported framerate possible is 1000 fps
+		__x_ABI_CWindows_CFoundation_CTimeSpan Duration = { MF_UNITS_PER_SECOND / 1000 };
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession5_put_MinUpdateInterval(Session5, Duration);
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession5_Release(Session5);
 	}
 
 	if (Capture->OnFrame)
