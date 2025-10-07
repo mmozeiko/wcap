@@ -165,6 +165,7 @@ static const int gValidVideoProfiles[][4] =
 
 // currently open dialog window
 static HWND gDialogWindow;
+static BOOL gUIStateChanging = FALSE;
 
 // current control to set shortcut
 struct
@@ -446,6 +447,14 @@ static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM W
 	return gConfigShortcut.WindowProc(Window, Message, WParam, LParam);
 }
 
+
+// Ensure accelerator underlines are visible on dialog children
+static BOOL CALLBACK Config__AccelEnumProc(HWND Child, LPARAM Param)
+{
+	SendMessageW(Child, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
+	return TRUE;
+}
+
 static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 {
 	if (Message == WM_INITDIALOG)
@@ -474,7 +483,25 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SetForegroundWindow(Window);
 		gDialogWindow = Window;
 		gConfigShortcut.Control = 0;
+
+		// force-show underlines (accelerators) for dialog and all children
+		SendMessageW(Window, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
+		EnumChildWindows(Window, Config__AccelEnumProc, 0);
 		return TRUE;
+	}
+	else if (Message == WM_UPDATEUISTATE)
+	{
+	// prevent system from hiding accelerators again without recursive loop
+	UINT Action = LOWORD(WParam);
+	UINT Flags  = HIWORD(WParam);
+	if (!gUIStateChanging && Action == UIS_SET && (Flags & (UISF_HIDEACCEL | UISF_HIDEFOCUS)))
+	{
+		gUIStateChanging = TRUE;
+		PostMessageW(Window, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, Flags & (UISF_HIDEACCEL | UISF_HIDEFOCUS)), 0);
+		gUIStateChanging = FALSE;
+		RedrawWindow(Window, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+		return 0;
+	}
 	}
 	else if (Message == WM_DESTROY)
 	{
