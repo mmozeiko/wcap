@@ -125,6 +125,7 @@ static BOOL Config_ShowDialog(Config* C);
 #define ITEM_FOLDER   (1<<3)
 #define ITEM_BUTTON   (1<<4)
 #define ITEM_HOTKEY   (1<<5)
+#define ITEM_RADIO    (1<<6)
 
 // win32 control styles
 #define CONTROL_BUTTON    0x0080
@@ -348,9 +349,25 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	SetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, C->VideoMaxFramerate, FALSE);
 	SetDlgItemInt(Window, ID_VIDEO_BITRATE,       C->VideoBitrate,      FALSE);
 
-	// audio
-	CheckDlgButton(Window, ID_AUDIO_CAPTURE, C->CaptureAudio);
-	CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, C->ApplicationLocalAudio);
+	// audio (radio logic)
+	if (C->CaptureAudio)
+	{
+		if (C->ApplicationLocalAudio)
+		{
+			CheckDlgButton(Window, ID_AUDIO_CAPTURE, FALSE);
+			CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, TRUE);
+		}
+		else
+		{
+			CheckDlgButton(Window, ID_AUDIO_CAPTURE, TRUE);
+			CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, FALSE);
+		}
+	}
+	else
+	{
+		CheckDlgButton(Window, ID_AUDIO_CAPTURE, FALSE);
+		CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, FALSE);
+	}
 	SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_SETCURSEL, C->AudioCodec, 0);
 	SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_SETCURSEL, C->AudioChannels - 1, 0);
 	WCHAR Text[64];
@@ -539,7 +556,9 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->VideoMaxFramerate       = GetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, NULL, FALSE);
 			C->VideoBitrate            = GetDlgItemInt(Window, ID_VIDEO_BITRATE,       NULL, FALSE);
 			// audio
-			C->CaptureAudio          = IsDlgButtonChecked(Window, ID_AUDIO_CAPTURE);
+			// 单选逻辑：两者之一被选中均表示开启音频捕获
+			C->CaptureAudio = (IsDlgButtonChecked(Window, ID_AUDIO_CAPTURE) || IsDlgButtonChecked(Window, ID_AUDIO_APPLICATION_LOCAL));
+			// 仅应用音频被选中 => ApplicationLocalAudio=TRUE；否则FALSE
 			C->ApplicationLocalAudio = IsDlgButtonChecked(Window, ID_AUDIO_APPLICATION_LOCAL);
 			C->AudioCodec            = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CODEC,    CB_GETCURSEL, 0, 0);
 			C->AudioChannels         = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_GETCURSEL, 0, 0) + 1;
@@ -785,36 +804,46 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 		Y += ITEM_HEIGHT - PADDING;
 		W -= 2 * PADDING;
 
-		for (const Config__DialogItem* Item = Group->Items; Item->Text; Item++)
+			int PrevWasRadio = 0;
+			for (const Config__DialogItem* Item = Group->Items; Item->Text; Item++)
 		{
 			int HasCheckbox  = !!(Item->Item & ITEM_CHECKBOX);
+			int HasRadio     = !!(Item->Item & ITEM_RADIO);
 			int HasNumber    = !!(Item->Item & ITEM_NUMBER);
 			int HasCombobox  = !!(Item->Item & ITEM_COMBOBOX);
-			int OnlyCheckbox = !(Item->Item & ~ITEM_CHECKBOX);
+			int HasToggle    = HasCheckbox || HasRadio;
+			int OnlyToggle   = !(Item->Item & ~(ITEM_CHECKBOX | ITEM_RADIO));
 			int HasHotKey    = !!(Item->Item & ITEM_HOTKEY);
 
 			int ItemX = X;
 			int ItemW = W;
 			int ItemId = Item->Id;
 
-			if (HasCheckbox)
+			if (HasToggle)
 			{
-				if (!OnlyCheckbox)
+				if (!OnlyToggle)
 				{
 					// reduce width so checbox can fit other control on the right
 					ItemW = Item->Width;
 				}
-				Data = Config__DoDialogItem(Data, Item->Text, ItemId, CONTROL_BUTTON, WS_TABSTOP | BS_AUTOCHECKBOX, ItemX, Y, ItemW, ITEM_HEIGHT);
+				DWORD BtnStyle = WS_TABSTOP | (HasRadio ? BS_AUTORADIOBUTTON : BS_AUTOCHECKBOX);
+				if (HasRadio && !PrevWasRadio) BtnStyle |= WS_GROUP;
+				Data = Config__DoDialogItem(Data, Item->Text, ItemId, CONTROL_BUTTON, BtnStyle, ItemX, Y, ItemW, ITEM_HEIGHT);
 				ItemCount++;
 				ItemId++;
-				if (!OnlyCheckbox)
+				if (!OnlyToggle)
 				{
 					ItemX += Item->Width + PADDING;
 					ItemW = W - (Item->Width + PADDING);
 				}
+				PrevWasRadio = HasRadio;
+			}
+			else
+			{
+				PrevWasRadio = 0;
 			}
 
-			if ((HasCombobox && !HasCheckbox) || (HasNumber || HasHotKey) && !HasCheckbox)
+			if ((HasCombobox && !HasToggle) || (HasNumber || HasHotKey) && !HasToggle)
 			{
 				// label, only for controls without checkbox, or combobox
 				Data = Config__DoDialogItem(Data, Item->Text, -1, CONTROL_STATIC, 0, ItemX, Y, Item->Width, ITEM_HEIGHT);
@@ -1126,8 +1155,8 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { COL10W + PADDING, ROW0H, COL11W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ L"Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
-					{ L"Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
+					{ L"Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_RADIO      },
+					{ L"Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_RADIO     },
 					{ L"Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
 					{ L"Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
 					{ L"Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
