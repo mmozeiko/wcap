@@ -1,4 +1,4 @@
-﻿#include "wcap.h"
+#include "wcap.h"
 #include "wcap_config.h"
 #include "wcap_audio_capture.h"
 #include "wcap_screen_capture.h"
@@ -982,8 +982,8 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
 			AppendMenuW(Menu, MF_STRING, CMD_WCAP, WCAP_TITLE);
 			AppendMenuW(Menu, MF_SEPARATOR, 0, NULL);
-			AppendMenuW(Menu, MF_STRING | (gRecording ? MF_DISABLED : 0), CMD_SETTINGS, L"设置");
-			AppendMenuW(Menu, MF_STRING, CMD_QUIT, L"退出");
+			AppendMenuW(Menu, MF_STRING | (gRecording ? MF_DISABLED : 0), CMD_SETTINGS, L"Settings");
+			AppendMenuW(Menu, MF_STRING, CMD_QUIT, L"Exit");
 
 			POINT Mouse;
 			GetCursorPos(&Mouse);
