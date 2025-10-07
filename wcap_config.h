@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "wcap.h"
 
@@ -183,9 +183,9 @@ static void Config__UpdateVideoProfiles(HWND Window, DWORD Codec)
 
 	if (Codec == CONFIG_VIDEO_H264)
 	{
-		ComboBox_AddString(Control, L"Base");
-		ComboBox_AddString(Control, L"Main");
-		ComboBox_AddString(Control, L"High");
+		ComboBox_AddString(Control, L"基础");
+		ComboBox_AddString(Control, L"常规");
+		ComboBox_AddString(Control, L"高质量");
 
 		ComboBox_SetItemData(Control, 0, CONFIG_VIDEO_BASE);
 		ComboBox_SetItemData(Control, 1, CONFIG_VIDEO_MAIN);
@@ -475,8 +475,8 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"44100");
 		SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_ADDSTRING, 0, (LPARAM)L"48000");
 
-		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L"Prefer iGPU");
-		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L"Prefer dGPU");
+		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L" 集成显卡");
+		SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_ADDSTRING, 0, (LPARAM)L" 独立显卡");
 
 		Config__SetDialogValues(Window, C);
 
@@ -661,14 +661,14 @@ typedef struct {
 } Config__DialogRect;
 
 typedef struct {
-    const wchar_t* Text;
+    const wchar_t* Text;        // 宽字符字符串指针
 	const WORD Id;
 	const WORD Item;
 	const DWORD Width;
 } Config__DialogItem;
 
 typedef struct {
-	const wchar_t* Caption;
+	const wchar_t* Caption;     // 宽字符字符串指针
 	const Config__DialogRect Rect;
 	const Config__DialogItem* Items;
 } Config__DialogGroup;
@@ -760,15 +760,15 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	int ButtonY = PADDING + ROW0H + ROW1H + ROW2H + PADDING;
 
 	DLGITEMTEMPLATE* OkData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, L"OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"确认", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	DLGITEMTEMPLATE* CancelData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, L"Cancel", ID_CANCEL, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"取消", ID_CANCEL, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	DLGITEMTEMPLATE* DefaultsData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, L"Defaults", ID_DEFAULTS, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"默认", ID_DEFAULTS, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	for (const Config__DialogGroup* Group = Layout->Groups; Group->Caption; Group++)
@@ -1080,69 +1080,69 @@ BOOL Config_ShowDialog(Config* C)
 		.Groups = (Config__DialogGroup[])
 		{
 			{
-				.Caption = L"Capture",
+				.Caption = L"捕获",
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ L"&Mouse Cursor",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
-					{ L"Only &Client Area",            ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
-					{ L"Show Recording &Border",       ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
-					{ L"Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
-					{ L"GPU &Encoder",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
+					{ L"鼠标光标  [&M]",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
+					{ L"仅窗口区域  [&C]",              ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
+					{ L"区域边界  [&B]",                ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
+					{ L"圆角窗口  [&R]",                ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
+					{ L"编码GPU  [&E]",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = L"&Output",
+				.Caption = L"输出  [&O]",
 				.Rect = { COL00W + PADDING, 0, COL01W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
 					{ L"",                            ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
-					{ L"O&pen When Finished",         ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
-					{ L"Fragmented MP&4 (H264 only)", ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
-					{ L"Limit &Length (seconds)",     ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
-					{ L"Limit &Size (MB)",            ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ L"完成自动打开  [&P]",            ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
+					{ L"分片MP&4 (仅H264)",           ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
+					{ L"时长 (秒)  [&L]",               ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ L"大小 (MB)  [&S]",               ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = L"&Video",
+				.Caption = L"视频  [&V]",
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ L"&Gamma Correct Resize",      ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
-					{ L"&Improved Color Conversion", ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
-					{ L"Codec",                      ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
-					{ L"Profile",                    ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
-					{ L"Max &Width",                 ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
-					{ L"Max &Height",                ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
-					{ L"Max &Framerate",             ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
-					{ L"Bitrate (kbit/s)",           ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
+					{ L"伽马校正缩放  [&G]",          ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
+					{ L"优化色彩转换  [&I]",          ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
+					{ L"编码",                      ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
+					{ L"配置",                      ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
+					{ L"宽度  [&W]",                  ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
+					{ L"高度  [&H]",                  ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
+					{ L"最大帧率  [&F]",              ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
+					{ L"比特率 (kbit/s]",           ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = L"&Audio",
+				.Caption = L"音频  [&A]",
 				.Rect = { COL10W + PADDING, ROW0H, COL11W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ L"Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
-					{ L"Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
-					{ L"Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
-					{ L"Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
-					{ L"Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
-					{ L"Bitrate (kbit/s)",         ID_AUDIO_BITRATE,           ITEM_COMBOBOX, 60 },
+					{ L"捕获音频  [&D]",            ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
+					{ L"应用本地音频  [&N]",        ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
+					{ L"编码",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
+					{ L"通道",                    ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
+					{ L"采样率",                  ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
+					{ L"比特率 (kbit/s)",         ID_AUDIO_BITRATE,           ITEM_COMBOBOX, 60 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = L"Shor&tcuts",
+				.Caption = L"快捷键  [&T]",
 				.Rect = { 0, ROW0H + ROW1H, COL00W + PADDING + COL01W, ROW2H },
 				.Items = (Config__DialogItem[])
 				{
-					{ L"Capture Monitor", ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
-					{ L"Capture Window",  ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
-					{ L"Capture Region",  ID_SHORTCUT_REGION,  ITEM_HOTKEY, 64 },
+					{ L"全屏录制",                ID_SHORTCUT_MONITOR,        ITEM_HOTKEY, 64 },
+					{ L"窗口录制",                ID_SHORTCUT_WINDOW,         ITEM_HOTKEY, 64 },
+					{ L"截屏录制",                ID_SHORTCUT_REGION,         ITEM_HOTKEY, 64 },
 					{ NULL },
 				},
 			},
