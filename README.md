@@ -96,7 +96,7 @@ This is free and unencumbered software released into the public domain.
 Anyone is free to copy, modify, publish, use, compile, sell, or distribute this software, either in source code form or as
 a compiled binary, for any purpose, commercial or non-commercial, and by any means.
 
-[汉化下载地址]: https://github.com/wuguo13842/wcap_Chinese-localization/releases/download/%E6%B1%89%E5%8C%962025%2F10%2F07%E6%9B%B4%E6%96%B0/wcap-x64.exe
+[汉化下载地址2025/10/07]: https://github.com/wuguo13842/wcap_Chinese-localization/releases/download/%E6%B1%89%E5%8C%962025%2F10%2F07%E6%9B%B4%E6%96%B0/wcap-x64.exe
 [wcap 原地址]: https://github.com/mmozeiko/wcap
 [wcap-x64.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap-x64.exe
 [wcap-arm64.exe]: https://raw.githubusercontent.com/wiki/mmozeiko/wcap/wcap-arm64.exe
@@ -112,4 +112,3 @@ a compiled binary, for any purpose, commercial or non-commercial, and by any mea
 [AV1]: https://en.wikipedia.org/wiki/AV1
 [AAC]: https://en.wikipedia.org/wiki/Advanced_Audio_Coding
 [FLAC]: https://en.wikipedia.org/wiki/FLAC
-
