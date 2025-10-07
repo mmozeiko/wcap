@@ -634,21 +634,21 @@ typedef struct {
 } Config__DialogRect;
 
 typedef struct {
-	const char* Text;
+    const wchar_t* Text;
 	const WORD Id;
 	const WORD Item;
 	const DWORD Width;
 } Config__DialogItem;
 
 typedef struct {
-	const char* Caption;
+	const wchar_t* Caption;
 	const Config__DialogRect Rect;
 	const Config__DialogItem* Items;
 } Config__DialogGroup;
 
 typedef struct {
-	const char* Title;
-	const char* Font;
+	LPCWSTR Title;
+	LPCWSTR Font;
 	const WORD FontSize;
 	const Config__DialogGroup* Groups;
 } Config__DialogLayout;
@@ -659,7 +659,7 @@ static void* Config__Align(BYTE* Data, SIZE_T Size)
 	return Data + ((Pointer + Size - 1) & ~(Size - 1)) - Pointer;
 }
 
-static BYTE* Config__DoDialogItem(BYTE* Data, LPCSTR Text, WORD Id, WORD Control, DWORD Style, int x, int y, int w, int h)
+static BYTE* Config__DoDialogItem(BYTE* Data, LPCWSTR Text, WORD Id, WORD Control, DWORD Style, int x, int y, int w, int h)
 {
 	Data = Config__Align(Data, sizeof(DWORD));
 
@@ -681,10 +681,10 @@ static BYTE* Config__DoDialogItem(BYTE* Data, LPCSTR Text, WORD Id, WORD Control
 	*(WORD*)Data = Control;
 	Data += sizeof(WORD);
 
-	// item text
+	// item text (wide string already)
 	Data = Config__Align(Data, sizeof(WCHAR));
-	DWORD ItemChars = MultiByteToWideChar(CP_UTF8, 0, Text, -1, (WCHAR*)Data, 128);
-	Data += ItemChars * sizeof(WCHAR);
+	wcscpy((wchar_t*)Data, Text);
+	Data += (wcslen(Text) + 1) * sizeof(WCHAR);
 
 	// create extras
 	Data = Config__Align(Data, sizeof(WORD));
@@ -712,20 +712,20 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	*(WCHAR*)Data = 0;
 	Data += sizeof(WCHAR);
 
-	// title
+	// title (wide)
 	Data = Config__Align(Data, sizeof(WCHAR));
-	DWORD TitleChars = MultiByteToWideChar(CP_UTF8, 0, Layout->Title, -1, (WCHAR*)Data, 128);
-	Data += TitleChars * sizeof(WCHAR);
+	wcscpy((wchar_t*)Data, Layout->Title);
+	Data += (wcslen(Layout->Title) + 1) * sizeof(WCHAR);
 
 	// font size
 	Data = Config__Align(Data, sizeof(WORD));
 	*(WORD*)Data = Layout->FontSize;
 	Data += sizeof(WORD);
 
-	// font name
+	// font name (wide)
 	Data = Config__Align(Data, sizeof(WCHAR));
-	DWORD FontChars = MultiByteToWideChar(CP_UTF8, 0, Layout->Font, -1, (WCHAR*)Data, 128);
-	Data += FontChars * sizeof(WCHAR);
+	wcscpy((wchar_t*)Data, Layout->Font);
+	Data += (wcslen(Layout->Font) + 1) * sizeof(WCHAR);
 
 	int ItemCount = 3;
 
@@ -733,15 +733,15 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 	int ButtonY = PADDING + ROW0H + ROW1H + ROW2H + PADDING;
 
 	DLGITEMTEMPLATE* OkData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, "OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"OK", ID_OK, CONTROL_BUTTON, WS_TABSTOP | BS_DEFPUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	DLGITEMTEMPLATE* CancelData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, "Cancel", ID_CANCEL, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"Cancel", ID_CANCEL, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	DLGITEMTEMPLATE* DefaultsData = Config__Align(Data, sizeof(DWORD));
-	Data = Config__DoDialogItem(Data, "Defaults", ID_DEFAULTS, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
+	Data = Config__DoDialogItem(Data, L"Defaults", ID_DEFAULTS, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, ButtonX, ButtonY, BUTTON_WIDTH, ITEM_HEIGHT);
 	ButtonX += BUTTON_WIDTH + PADDING;
 
 	for (const Config__DialogGroup* Group = Layout->Groups; Group->Caption; Group++)
@@ -798,29 +798,29 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 
 			if (HasNumber)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER | ES_RIGHT | ES_NUMBER, ItemX, Y, ItemW, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, L"", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER | ES_RIGHT | ES_NUMBER, ItemX, Y, ItemW, ITEM_HEIGHT);
 				ItemCount++;
 			}
 
 			if (HasHotKey)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_BUTTON, WS_TABSTOP, ItemX, Y, ItemW, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, L"", ItemId, CONTROL_BUTTON, WS_TABSTOP, ItemX, Y, ItemW, ITEM_HEIGHT);
 				ItemCount++;
 			}
 
 			if (HasCombobox)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_COMBOBOX, WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, ItemX, Y, ItemW, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, L"", ItemId, CONTROL_COMBOBOX, WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, ItemX, Y, ItemW, ITEM_HEIGHT);
 				ItemCount++;
 			}
 
 			if (Item->Item & ITEM_FOLDER)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, L"", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
 				ItemCount++;
 				ItemId++;
 
-				Data = Config__DoDialogItem(Data, "...", ItemId, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, X + W - BUTTON_SMALL_WIDTH + 2, Y + 1, BUTTON_SMALL_WIDTH - 4, ITEM_HEIGHT - 3);
+				Data = Config__DoDialogItem(Data, L"...", ItemId, CONTROL_BUTTON, WS_TABSTOP | BS_PUSHBUTTON, X + W - BUTTON_SMALL_WIDTH + 2, Y + 1, BUTTON_SMALL_WIDTH - 4, ITEM_HEIGHT - 3);
 				ItemCount++;
 			}
 
@@ -1048,74 +1048,74 @@ BOOL Config_ShowDialog(Config* C)
 	Config__DialogLayout Dialog = (Config__DialogLayout)
 	{
 		.Title = WCAP_CONFIG_TITLE,
-		.Font = "Segoe UI",
+		.Font = L"Segoe UI",
 		.FontSize = 9,
 		.Groups = (Config__DialogGroup[])
 		{
 			{
-				.Caption = "Capture",
+				.Caption = L"Capture",
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "&Mouse Cursor",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
-					{ "Only &Client Area",            ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
-					{ "Show Recording &Border",       ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
-					{ "Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
-					{ "GPU &Encoder",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
+					{ L"&Mouse Cursor",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
+					{ L"Only &Client Area",            ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
+					{ L"Show Recording &Border",       ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
+					{ L"Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
+					{ L"GPU &Encoder",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = "&Output",
+				.Caption = L"&Output",
 				.Rect = { COL00W + PADDING, 0, COL01W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "",                            ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
-					{ "O&pen When Finished",         ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
-					{ "Fragmented MP&4 (H264 only)", ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
-					{ "Limit &Length (seconds)",     ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
-					{ "Limit &Size (MB)",            ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ L"",                            ID_OUTPUT_FOLDER,  ITEM_FOLDER                     },
+					{ L"O&pen When Finished",         ID_OPEN_FOLDER,    ITEM_CHECKBOX                   },
+					{ L"Fragmented MP&4 (H264 only)", ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
+					{ L"Limit &Length (seconds)",     ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ L"Limit &Size (MB)",            ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = "&Video",
+				.Caption = L"&Video",
 				.Rect = { 0, ROW0H, COL10W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "&Gamma Correct Resize",      ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
-					{ "&Improved Color Conversion", ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
-					{ "Codec",                      ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
-					{ "Profile",                    ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
-					{ "Max &Width",                 ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
-					{ "Max &Height",                ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
-					{ "Max &Framerate",             ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
-					{ "Bitrate (kbit/s)",           ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
+					{ L"&Gamma Correct Resize",      ID_VIDEO_GAMMA_RESIZE ,    ITEM_CHECKBOX     },
+					{ L"&Improved Color Conversion", ID_VIDEO_IMPROVED_CONVERT, ITEM_CHECKBOX     },
+					{ L"Codec",                      ID_VIDEO_CODEC,            ITEM_COMBOBOX, 64 },
+					{ L"Profile",                    ID_VIDEO_PROFILE,          ITEM_COMBOBOX, 64 },
+					{ L"Max &Width",                 ID_VIDEO_MAX_WIDTH,        ITEM_NUMBER,   64 },
+					{ L"Max &Height",                ID_VIDEO_MAX_HEIGHT,       ITEM_NUMBER,   64 },
+					{ L"Max &Framerate",             ID_VIDEO_MAX_FRAMERATE,    ITEM_NUMBER,   64 },
+					{ L"Bitrate (kbit/s)",           ID_VIDEO_BITRATE,          ITEM_NUMBER,   64 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = "&Audio",
+				.Caption = L"&Audio",
 				.Rect = { COL10W + PADDING, ROW0H, COL11W, ROW1H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
-					{ "Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
-					{ "Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
-					{ "Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
-					{ "Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
-					{ "Bitrate (kbit/s)",         ID_AUDIO_BITRATE,           ITEM_COMBOBOX, 60 },
+					{ L"Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
+					{ L"Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
+					{ L"Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
+					{ L"Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
+					{ L"Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
+					{ L"Bitrate (kbit/s)",         ID_AUDIO_BITRATE,           ITEM_COMBOBOX, 60 },
 					{ NULL },
 				},
 			},
 			{
-				.Caption = "Shor&tcuts",
+				.Caption = L"Shor&tcuts",
 				.Rect = { 0, ROW0H + ROW1H, COL00W + PADDING + COL01W, ROW2H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "Capture Monitor", ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
-					{ "Capture Window",  ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
-					{ "Capture Region",  ID_SHORTCUT_REGION,  ITEM_HOTKEY, 64 },
+					{ L"Capture Monitor", ID_SHORTCUT_MONITOR, ITEM_HOTKEY, 64 },
+					{ L"Capture Window",  ID_SHORTCUT_WINDOW,  ITEM_HOTKEY, 64 },
+					{ L"Capture Region",  ID_SHORTCUT_REGION,  ITEM_HOTKEY, 64 },
 					{ NULL },
 				},
 			},

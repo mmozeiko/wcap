@@ -17,10 +17,14 @@
 #define WCAP_TITLE L"wcap"
 #define WCAP_URL   L"https://github.com/mmozeiko/wcap"
 
+// helper to widen narrow string literals to wide at compile time
+#define WCAP_WIDEN2(x) L##x
+#define WCAP_WIDEN(x) WCAP_WIDEN2(x)
+
 #if defined(WCAP_GIT_INFO)
-#	define WCAP_CONFIG_TITLE "wcap, " __DATE__ " [" WCAP_GIT_INFO "]"
+#	define WCAP_CONFIG_TITLE WCAP_WIDEN("wcap, " __DATE__ " [" WCAP_GIT_INFO "]")
 #else
-#	define WCAP_CONFIG_TITLE "wcap, " __DATE__
+#	define WCAP_CONFIG_TITLE WCAP_WIDEN("wcap, " __DATE__)
 #endif
 
 #ifdef _DEBUG
