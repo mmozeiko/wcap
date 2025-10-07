@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "wcap.h"
 
@@ -385,7 +385,7 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),            ScreenCapture_CanHideMouseCursor());
 	EnableWindow(GetDlgItem(Window, ID_SHOW_RECORDING_BORDER),   ScreenCapture_CanHideRecordingBorder());
 	EnableWindow(GetDlgItem(Window, ID_ROUNDED_CORNERS),         ScreenCapture_CanDisableRoundedCorners());
-	EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL), AudioCapture_CanCaptureApplicationLocal());
+	EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL), C->CaptureAudio && AudioCapture_CanCaptureApplicationLocal());
 }
 
 void DisableHotKeys(void);
@@ -599,6 +599,16 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		else if (Control == ID_LIMIT_SIZE && HIWORD(WParam) == BN_CLICKED)
 		{
 			EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1), (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_SIZE, BM_GETCHECK, 0, 0));
+			return TRUE;
+		}
+		else if (Control == ID_AUDIO_CAPTURE && HIWORD(WParam) == BN_CLICKED)
+		{
+			BOOL AudioCaptureEnabled = (BOOL)SendDlgItemMessageW(Window, ID_AUDIO_CAPTURE, BM_GETCHECK, 0, 0);
+			EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL), AudioCaptureEnabled);
+			if (!AudioCaptureEnabled)
+			{
+				CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, FALSE);
+			}
 			return TRUE;
 		}
 		else if (Control == ID_OUTPUT_FOLDER + 1)
