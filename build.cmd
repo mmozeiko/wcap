@@ -35,7 +35,7 @@ if "%ARGS:debug=%" neq "%ARGS%" (
   if "%TARGET_ARCH%" equ "x64" set CL=!CL! /fsanitize=address
 ) else (
   set CL=/GL /O1 /Oi /DNDEBUG /GS-
-  set LINK=/LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
+  set LINK=/NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /LTCG /OPT:REF /OPT:ICF ucrt.lib libvcruntime.lib
   set FXC=/O3 /Qstrip_reflect /Qstrip_debug /Qstrip_priv
 )
 
