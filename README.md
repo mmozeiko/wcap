@@ -56,7 +56,8 @@ dropped frames during recording, try reducing video resolution and framerate.
 
 Capture of mouse cursor can be disabled only when using Windows 10 version 2004, May 2020 Update (20H1) or newer.
 
-On Windows 11 you can disable yellow recording borders, or rounded window corners.
+On Windows 11 you can disable yellow recording borders, or rounded window corners. On Windows 11 24H2 version can enable secondary
+window capture, when they intersect main window in window-only capture mode - for popups & tool windows like "Open File" dialog.
 
 HEVC Software Encoding
 ======================

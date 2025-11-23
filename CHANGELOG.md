@@ -1,6 +1,9 @@
 Changelog
 =========
 
+##### 2025.11.23
+ * option to capture secondary windows (popups & dialogs) on Windows 11 24H2 and up
+
 ##### 2025.05.25
  * fix screen capture framerate on Windows 11 24H2
 

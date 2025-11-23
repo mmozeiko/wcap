@@ -25,6 +25,7 @@ typedef struct
 	BOOL OnlyClientArea;
 	BOOL ShowRecordingBorder;
 	BOOL KeepRoundedWindowCorners;
+	BOOL IncludeSecondaryWindows;
 	BOOL HardwareEncoder;
 	BOOL HardwarePreferIntegrated;
 	// output
@@ -86,11 +87,12 @@ static BOOL Config_ShowDialog(Config* C);
 #define ID_CANCEL                  IDCANCEL // 2
 #define ID_DEFAULTS                3
 
-#define ID_MOUSE_CURSOR            20
-#define ID_ONLY_CLIENT_AREA        30
-#define ID_SHOW_RECORDING_BORDER   40
-#define ID_ROUNDED_CORNERS         50
-#define ID_GPU_ENCODER             60
+#define ID_MOUSE_CURSOR              20
+#define ID_ONLY_CLIENT_AREA          30
+#define ID_SHOW_RECORDING_BORDER     40
+#define ID_ROUNDED_CORNERS           50
+#define ID_INCLUDE_SECONDARY_WINDOWS 55
+#define ID_GPU_ENCODER               60
 
 #define ID_OUTPUT_FOLDER           100
 #define ID_OPEN_FOLDER             110
@@ -139,7 +141,7 @@ static BOOL Config_ShowDialog(Config* C);
 #define COL01W 154
 #define COL10W 144
 #define COL11W 130
-#define ROW0H 84
+#define ROW0H 98
 #define ROW1H 124
 #define ROW2H 56
 
@@ -321,11 +323,12 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	Config__UpdateAudioBitrate(Window, C->AudioCodec, C->AudioBitrate);
 
 	// capture
-	CheckDlgButton(Window, ID_MOUSE_CURSOR,          C->MouseCursor);
-	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,      C->OnlyClientArea);
-	CheckDlgButton(Window, ID_SHOW_RECORDING_BORDER, C->ShowRecordingBorder);
-	CheckDlgButton(Window, ID_ROUNDED_CORNERS,       C->KeepRoundedWindowCorners);
-	CheckDlgButton(Window, ID_GPU_ENCODER,           C->HardwareEncoder);
+	CheckDlgButton(Window, ID_MOUSE_CURSOR,              C->MouseCursor);
+	CheckDlgButton(Window, ID_ONLY_CLIENT_AREA,          C->OnlyClientArea);
+	CheckDlgButton(Window, ID_SHOW_RECORDING_BORDER,     C->ShowRecordingBorder);
+	CheckDlgButton(Window, ID_ROUNDED_CORNERS,           C->KeepRoundedWindowCorners);
+	CheckDlgButton(Window, ID_INCLUDE_SECONDARY_WINDOWS, C->IncludeSecondaryWindows);
+	CheckDlgButton(Window, ID_GPU_ENCODER,               C->HardwareEncoder);
 	SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_SETCURSEL, C->HardwarePreferIntegrated ? 0 : 1, 0);
 
 	// output
@@ -381,10 +384,11 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), C->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   C->EnableLimitSize);
 
-	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),            ScreenCapture_CanHideMouseCursor());
-	EnableWindow(GetDlgItem(Window, ID_SHOW_RECORDING_BORDER),   ScreenCapture_CanHideRecordingBorder());
-	EnableWindow(GetDlgItem(Window, ID_ROUNDED_CORNERS),         ScreenCapture_CanDisableRoundedCorners());
-	EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL), AudioCapture_CanCaptureApplicationLocal());
+	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),              ScreenCapture_CanHideMouseCursor());
+	EnableWindow(GetDlgItem(Window, ID_SHOW_RECORDING_BORDER),     ScreenCapture_CanHideRecordingBorder());
+	EnableWindow(GetDlgItem(Window, ID_ROUNDED_CORNERS),           ScreenCapture_CanDisableRoundedCorners());
+	EnableWindow(GetDlgItem(Window, ID_INCLUDE_SECONDARY_WINDOWS), ScreenCapture_CanIncludeSecondaryWindows());
+	EnableWindow(GetDlgItem(Window, ID_AUDIO_APPLICATION_LOCAL),   AudioCapture_CanCaptureApplicationLocal());
 }
 
 void DisableHotKeys(void);
@@ -491,6 +495,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->OnlyClientArea           = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
 			C->ShowRecordingBorder      = IsDlgButtonChecked(Window, ID_SHOW_RECORDING_BORDER);
 			C->KeepRoundedWindowCorners = IsDlgButtonChecked(Window, ID_ROUNDED_CORNERS);
+			C->IncludeSecondaryWindows  = IsDlgButtonChecked(Window, ID_INCLUDE_SECONDARY_WINDOWS);
 			C->HardwareEncoder          = IsDlgButtonChecked(Window, ID_GPU_ENCODER);
 			C->HardwarePreferIntegrated = (DWORD)SendDlgItemMessageW(Window, ID_GPU_ENCODER + 1, CB_GETCURSEL, 0, 0) == 0;
 
@@ -848,6 +853,7 @@ void Config_Defaults(Config* C)
 		.OnlyClientArea = TRUE,
 		.ShowRecordingBorder = TRUE,
 		.KeepRoundedWindowCorners = TRUE,
+		.IncludeSecondaryWindows = FALSE,
 		.HardwareEncoder = TRUE,
 		.HardwarePreferIntegrated = FALSE,
 		// output
@@ -955,6 +961,7 @@ void Config_Load(Config* C, LPCWSTR FileName)
 	Config__GetBool(FileName, L"OnlyClientArea",           &C->OnlyClientArea);
 	Config__GetBool(FileName, L"ShowRecordingBorder",      &C->ShowRecordingBorder);
 	Config__GetBool(FileName, L"KeepRoundedWindowCorners", &C->KeepRoundedWindowCorners);
+	Config__GetBool(FileName, L"IncludeSecondaryWindows",  &C->IncludeSecondaryWindows);
 	Config__GetBool(FileName, L"HardwareEncoder",          &C->HardwareEncoder);
 	Config__GetBool(FileName, L"HardwarePreferIntegrated", &C->HardwarePreferIntegrated);
 	// output
@@ -1005,6 +1012,7 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	WritePrivateProfileStringW(INI_SECTION, L"OnlyClientArea",           C->OnlyClientArea           ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"ShowRecordingBorder",      C->ShowRecordingBorder      ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"KeepRoundedWindowCorners", C->KeepRoundedWindowCorners ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"IncludeSecondaryWindows",  C->IncludeSecondaryWindows  ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwareEncoder",          C->HardwareEncoder          ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"HardwarePreferIntegrated", C->HardwarePreferIntegrated ? L"1" : L"0", FileName);
 	// output
@@ -1057,11 +1065,12 @@ BOOL Config_ShowDialog(Config* C)
 				.Rect = { 0, 0, COL00W, ROW0H },
 				.Items = (Config__DialogItem[])
 				{
-					{ "&Mouse Cursor",                ID_MOUSE_CURSOR,          ITEM_CHECKBOX                     },
-					{ "Only &Client Area",            ID_ONLY_CLIENT_AREA,      ITEM_CHECKBOX                     },
-					{ "Show Recording &Border",       ID_SHOW_RECORDING_BORDER, ITEM_CHECKBOX                     },
-					{ "Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,       ITEM_CHECKBOX                     },
-					{ "GPU &Encoder",                 ID_GPU_ENCODER,           ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
+					{ "&Mouse Cursor",                ID_MOUSE_CURSOR,              ITEM_CHECKBOX                     },
+					{ "Only &Client Area",            ID_ONLY_CLIENT_AREA,          ITEM_CHECKBOX                     },
+					{ "Show Recording &Border",       ID_SHOW_RECORDING_BORDER,     ITEM_CHECKBOX                     },
+					{ "Keep &Rounded Window Corners", ID_ROUNDED_CORNERS,           ITEM_CHECKBOX                     },
+					{ "Include Secondar&y Windows",   ID_INCLUDE_SECONDARY_WINDOWS, ITEM_CHECKBOX                     },
+					{ "GPU &Encoder",                 ID_GPU_ENCODER,               ITEM_CHECKBOX | ITEM_COMBOBOX, 50 },
 					{ NULL },
 				},
 			},

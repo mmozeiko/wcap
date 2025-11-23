@@ -63,6 +63,7 @@ static bool ScreenCapture_IsSupported(void);
 static bool ScreenCapture_CanHideMouseCursor(void);
 static bool ScreenCapture_CanHideRecordingBorder(void);
 static bool ScreenCapture_CanDisableRoundedCorners(void);
+static bool ScreenCapture_CanIncludeSecondaryWindows(void);
 
 // if OnFrame is NULL then you need to periodically call GetFrame/ReleaseFrame manually
 // if OnFrame is not NULL and CallbackOnThread is false then callback will be invoked from message processing loop on the same thread as Create call
@@ -72,7 +73,7 @@ static void ScreenCapture_Release(ScreenCapture* Capture);
 
 static bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea, bool DisableRoundedCorners);
 static bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device, HMONITOR Monitor, const RECT* Rect);
-static void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder);
+static void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder, bool IncludeSecondaryWindows);
 static void ScreenCapture_Stop(ScreenCapture* Capture);
 
 static bool ScreenCapture_GetFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame);
@@ -157,6 +158,7 @@ DEFINE_GUID(IID_IClosable,                           0x30d5a829, 0x7fa4, 0x4026,
 DEFINE_GUID(IID_IGraphicsCaptureSession2,            0x2c39ae40, 0x7d2e, 0x5044, 0x80, 0x4e, 0x8b, 0x67, 0x99, 0xd4, 0xcf, 0x9e);
 DEFINE_GUID(IID_IGraphicsCaptureSession3,            0xf2cdd966, 0x22ae, 0x5ea1, 0x95, 0x96, 0x3a, 0x28, 0x93, 0x44, 0xc3, 0xbe);
 DEFINE_GUID(IID_IGraphicsCaptureSession5,            0x67c0ea62, 0x1f85, 0x5061, 0x92, 0x5a, 0x23, 0x9b, 0xe0, 0xac, 0x09, 0xcb);
+DEFINE_GUID(IID_IGraphicsCaptureSession6,            0xd7419236, 0xbe20, 0x5e9f, 0xbc, 0xd6, 0xc4, 0xe9, 0x8f, 0xd6, 0xaf, 0xdc);
 DEFINE_GUID(IID_IGraphicsCaptureItemInterop,         0x3628e81b, 0x3cac, 0x4c60, 0xb7, 0xf4, 0x23, 0xce, 0x0e, 0x0c, 0x33, 0x56);
 DEFINE_GUID(IID_IGraphicsCaptureItem,                0x79c3f95b, 0x31f7, 0x4ec2, 0xa4, 0x64, 0x63, 0x2e, 0xf5, 0xd3, 0x07, 0x60);
 DEFINE_GUID(IID_IGraphicsCaptureItemHandler,         0xe9c610c0, 0xa68c, 0x5bd9, 0x80, 0x21, 0x85, 0x89, 0x34, 0x6e, 0xee, 0xe2);
@@ -349,6 +351,15 @@ bool ScreenCapture_CanDisableRoundedCorners(void)
 	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 22000);
 }
 
+bool ScreenCapture_CanIncludeSecondaryWindows(void)
+{
+	RTL_OSVERSIONINFOW Version = { sizeof(Version) };
+	RtlGetVersion(&Version);
+
+	// available since Windows 11 24H2, build 10.0.26100.0
+	return Version.dwMajorVersion > 10 || (Version.dwMajorVersion == 10 && Version.dwBuildNumber >= 26100);
+}
+
 void ScreenCapture_Create(ScreenCapture* Capture, ScreenCapture_OnFrameCallback* OnFrame, bool CallbackOnThread)
 {
 	HR(RoInitialize(RO_INIT_SINGLETHREADED));
@@ -497,7 +508,7 @@ bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device
 	return false;
 }
 
-void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder)
+void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder, bool IncludeSecondaryWindows)
 {
 	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession* Session;
 	HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_CreateCaptureSession(Capture->FramePool, Capture->Item, &Session));
@@ -524,6 +535,13 @@ void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool With
 		__x_ABI_CWindows_CFoundation_CTimeSpan Duration = { MF_UNITS_PER_SECOND / 1000 };
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession5_put_MinUpdateInterval(Session5, Duration);
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession5_Release(Session5);
+	}
+
+	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession6* Session6;
+	if (SUCCEEDED(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Session, &IID_IGraphicsCaptureSession6, (void**)&Session6)))
+	{
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession6_put_IncludeSecondaryWindows(Session6, (boolean)IncludeSecondaryWindows);
+		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession6_Release(Session6);
 	}
 
 	if (Capture->OnFrame)

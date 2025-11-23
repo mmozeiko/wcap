@@ -261,7 +261,7 @@ static void StartRecording(ID3D11Device* Device, HWND Window)
 	gRecordingNextEncode = 0;
 	gRecordingLastFrame = 0;
 	gRecordingDroppedFrames = 0;
-	ScreenCapture_Start(&gCapture, gConfig.MouseCursor, gConfig.ShowRecordingBorder);
+	ScreenCapture_Start(&gCapture, gConfig.MouseCursor, gConfig.ShowRecordingBorder, gConfig.IncludeSecondaryWindows);
 
 	if (gConfig.CaptureAudio)
 	{
