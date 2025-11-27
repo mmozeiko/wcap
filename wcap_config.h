@@ -530,6 +530,15 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->ShortcutMonitor = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_MONITOR), GWLP_USERDATA);
 			C->ShortcutWindow  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_WINDOW),  GWLP_USERDATA);
 			C->ShortcutRegion  = GetWindowLongW(GetDlgItem(Window, ID_SHORTCUT_REGION),  GWLP_USERDATA);
+			
+			if (GetFileAttributesW(C->OutputFolder) == INVALID_FILE_ATTRIBUTES)
+			{
+				MessageBoxW(Window, L"  Save unsuccessful - Output Folder not found.\n\n  Choose a valid folder.", WCAP_TITLE, MB_ICONEXCLAMATION);
+				// Simulate click of ... button (browse folder).
+				// Will be handled in this same window procedure.
+				SendMessageW(Window, WM_COMMAND, ID_OUTPUT_FOLDER + 1, 0);
+				return -1;
+			}
 
 			EndDialog(Window, TRUE);
 			return TRUE;
@@ -821,7 +830,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 
 			if (Item->Item & ITEM_FOLDER)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
 				ItemCount++;
 				ItemId++;
 
