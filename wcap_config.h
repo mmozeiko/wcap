@@ -821,7 +821,7 @@ static void Config__DoDialogLayout(const Config__DialogLayout* Layout, BYTE* Dat
 
 			if (Item->Item & ITEM_FOLDER)
 			{
-				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
+				Data = Config__DoDialogItem(Data, "", ItemId, CONTROL_EDIT, WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, X, Y, W - BUTTON_SMALL_WIDTH - PADDING + 2, ITEM_HEIGHT);
 				ItemCount++;
 				ItemId++;
 

@@ -201,6 +201,15 @@ static void StartRecording(ID3D11Device* Device, HWND Window)
 	SYSTEMTIME Time;
 	GetLocalTime(&Time);
 
+	int Error = SHCreateDirectoryExW(NULL, gConfig.OutputFolder, NULL);
+	if (Error != ERROR_SUCCESS && Error != ERROR_FILE_EXISTS && Error != ERROR_ALREADY_EXISTS)
+	{
+		ShowNotification(L"Cannot create output folder!", L"Cannot Start Recording", NIIF_WARNING);
+		ScreenCapture_Stop(&gCapture);
+		ID3D11Device_Release(Device);
+		return;
+	}
+
 	WCHAR Filename[256];
 	StrFormat(Filename, L"%04u%02u%02u_%02u%02u%02u.mp4", Time.wYear, Time.wMonth, Time.wDay, Time.wHour, Time.wMinute, Time.wSecond);
 
