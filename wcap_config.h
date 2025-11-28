@@ -349,6 +349,10 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	SetDlgItemInt(Window, ID_VIDEO_MAX_HEIGHT,    C->VideoMaxHeight,    FALSE);
 	SetDlgItemInt(Window, ID_VIDEO_MAX_FRAMERATE, C->VideoMaxFramerate, FALSE);
 	SetDlgItemInt(Window, ID_VIDEO_BITRATE,       C->VideoBitrate,      FALSE);
+	for (unsigned short ID = ID_VIDEO_MAX_WIDTH; ID <= ID_VIDEO_BITRATE; ID += 10)
+	{
+		SendDlgItemMessageW(Window, ID, EM_SETLIMITTEXT, (WPARAM)9, 0);
+	}
 
 	// audio
 	CheckDlgButton(Window, ID_AUDIO_CAPTURE, C->CaptureAudio);
@@ -383,6 +387,10 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	EnableWindow(GetDlgItem(Window, ID_GPU_ENCODER + 1),  C->HardwareEncoder);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), C->EnableLimitLength);
 	EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1),   C->EnableLimitSize);
+	for (unsigned short ID = ID_LIMIT_LENGTH + 1; ID <= ID_LIMIT_SIZE + 1; ID += 10)
+	{
+		SendDlgItemMessageW(Window, ID, EM_SETLIMITTEXT, (WPARAM)9, 0);
+	}
 
 	EnableWindow(GetDlgItem(Window, ID_MOUSE_CURSOR),              ScreenCapture_CanHideMouseCursor());
 	EnableWindow(GetDlgItem(Window, ID_SHOW_RECORDING_BORDER),     ScreenCapture_CanHideRecordingBorder());
@@ -571,12 +579,24 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		}
 		else if (Control == ID_LIMIT_LENGTH && HIWORD(WParam) == BN_CLICKED)
 		{
-			EnableWindow(GetDlgItem(Window, ID_LIMIT_LENGTH + 1), (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_LENGTH, BM_GETCHECK, 0, 0));
+			BOOL IsChecked = (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_LENGTH, BM_GETCHECK, 0, 0);
+			HWND LimitLengthEdit = GetDlgItem(Window, ID_LIMIT_LENGTH + 1);
+			EnableWindow(LimitLengthEdit, IsChecked);
+			if (IsChecked)
+			{
+				SendMessageW(Window, WM_NEXTDLGCTL, (WPARAM)LimitLengthEdit, TRUE);
+			}
 			return TRUE;
 		}
 		else if (Control == ID_LIMIT_SIZE && HIWORD(WParam) == BN_CLICKED)
 		{
-			EnableWindow(GetDlgItem(Window, ID_LIMIT_SIZE + 1), (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_SIZE, BM_GETCHECK, 0, 0));
+			BOOL IsChecked = (BOOL)SendDlgItemMessageW(Window, ID_LIMIT_SIZE, BM_GETCHECK, 0, 0);
+			HWND LimitSizeEdit = GetDlgItem(Window, ID_LIMIT_SIZE + 1);
+			EnableWindow(LimitSizeEdit, IsChecked);
+			if (IsChecked)
+			{
+				SendMessageW(Window, WM_NEXTDLGCTL, (WPARAM)LimitSizeEdit, TRUE);
+			}
 			return TRUE;
 		}
 		else if (Control == ID_OUTPUT_FOLDER + 1)
