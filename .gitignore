@@ -6,3 +6,5 @@
 *.exp
 shaders
 
+graphify-out/
+wcap-x64-log.txt

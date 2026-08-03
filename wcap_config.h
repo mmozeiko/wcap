@@ -48,6 +48,8 @@ typedef struct
 	// audio
 	BOOL CaptureAudio;
 	BOOL ApplicationLocalAudio;
+	BOOL CaptureMicrophone;
+	DWORD MicrophoneGain;
 	DWORD AudioCodec;
 	DWORD AudioChannels;
 	DWORD AudioSamplerate;
@@ -56,6 +58,8 @@ typedef struct
 	DWORD ShortcutMonitor;
 	DWORD ShortcutWindow;
 	DWORD ShortcutRegion;
+	// advanced
+	BOOL EnableLog;
 }
 Config;
 
@@ -99,6 +103,7 @@ static BOOL Config_ShowDialog(Config* C);
 #define ID_FRAGMENTED_MP4          120
 #define ID_LIMIT_LENGTH            130
 #define ID_LIMIT_SIZE              140
+#define ID_ENABLE_LOG              150
 
 #define ID_VIDEO_GAMMA_RESIZE      200
 #define ID_VIDEO_IMPROVED_CONVERT  210
@@ -115,6 +120,8 @@ static BOOL Config_ShowDialog(Config* C);
 #define ID_AUDIO_CHANNELS          330
 #define ID_AUDIO_SAMPLERATE        340
 #define ID_AUDIO_BITRATE           350
+#define ID_AUDIO_MICROPHONE        360
+#define ID_AUDIO_MIC_GAIN          370
 
 #define ID_SHORTCUT_MONITOR        400
 #define ID_SHORTCUT_WINDOW         410
@@ -142,7 +149,7 @@ static BOOL Config_ShowDialog(Config* C);
 #define COL10W 144
 #define COL11W 130
 #define ROW0H 98
-#define ROW1H 124
+#define ROW1H 152
 #define ROW2H 56
 
 #define PADDING 4             // padding for dialog and group boxes
@@ -337,6 +344,7 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	CheckDlgButton(Window, ID_FRAGMENTED_MP4,  C->FragmentedOutput);
 	CheckDlgButton(Window, ID_LIMIT_LENGTH,    C->EnableLimitLength);
 	CheckDlgButton(Window, ID_LIMIT_SIZE,      C->EnableLimitSize);
+	CheckDlgButton(Window, ID_ENABLE_LOG,      C->EnableLog);
 	SetDlgItemInt(Window, ID_LIMIT_LENGTH + 1, C->LimitLength, FALSE);
 	SetDlgItemInt(Window, ID_LIMIT_SIZE + 1,   C->LimitSize,   FALSE);
 
@@ -353,6 +361,8 @@ static void Config__SetDialogValues(HWND Window, Config* C)
 	// audio
 	CheckDlgButton(Window, ID_AUDIO_CAPTURE, C->CaptureAudio);
 	CheckDlgButton(Window, ID_AUDIO_APPLICATION_LOCAL, C->ApplicationLocalAudio);
+	CheckDlgButton(Window, ID_AUDIO_MICROPHONE, C->CaptureMicrophone);
+	SetDlgItemInt(Window, ID_AUDIO_MIC_GAIN, C->MicrophoneGain, FALSE);
 	SendDlgItemMessageW(Window, ID_AUDIO_CODEC, CB_SETCURSEL, C->AudioCodec, 0);
 	SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_SETCURSEL, C->AudioChannels - 1, 0);
 	WCHAR Text[64];
@@ -408,6 +418,7 @@ static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM W
 
 	if (Message == WM_KEYUP || Message == WM_SYSKEYUP)
 	{
+		LOG_INFO("Config__ShortcutProc: key up WParam=0x%04X", WParam);
 		if (WParam != VK_LCONTROL &&  WParam != VK_RCONTROL && WParam != VK_CONTROL &&
 			WParam != VK_LSHIFT && WParam != VK_RSHIFT && WParam != VK_SHIFT &&
 			WParam != VK_LMENU && WParam != VK_RMENU && WParam != VK_MENU &&
@@ -416,10 +427,12 @@ static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM W
 			DWORD Shortcut;
 			if (WParam == VK_ESCAPE)
 			{
+				LOG_INFO("Config__ShortcutProc: ESC pressed, canceling");
 				Shortcut = GetWindowLongW(Window, GWLP_USERDATA);
 			}
 			else if (WParam == VK_BACK)
 			{
+				LOG_INFO("Config__ShortcutProc: BACKSPACE pressed, clearing");
 				Shortcut = 0;
 			}
 			else
@@ -433,6 +446,7 @@ static LRESULT CALLBACK Config__ShortcutProc(HWND Window, UINT Message, WPARAM W
 					| ((GetKeyState(VK_SHIFT) >> 15)   ? MOD_SHIFT   : 0);
 
 				Shortcut = HOT_KEY(VirtualKey, Mods);
+				LOG_INFO("Config__ShortcutProc: shortcut captured: 0x%08X", Shortcut);
 			}
 
 			WCHAR Text[64];
@@ -454,6 +468,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 {
 	if (Message == WM_INITDIALOG)
 	{
+		LOG_INFO("Config__DialogProc: WM_INITDIALOG");
 		Config* C = (Config*)LParam;
 		SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)C);
 
@@ -478,18 +493,22 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		SetForegroundWindow(Window);
 		gDialogWindow = Window;
 		gConfigShortcut.Control = 0;
+		LOG_INFO("Config__DialogProc: WM_INITDIALOG complete");
 		return TRUE;
 	}
 	else if (Message == WM_DESTROY)
 	{
+		LOG_INFO("Config__DialogProc: WM_DESTROY");
 		gDialogWindow = NULL;
 	}
 	else if (Message == WM_COMMAND)
 	{
 		Config* C = (Config*)GetWindowLongPtrW(Window, GWLP_USERDATA);
 		int Control = LOWORD(WParam);
+		LOG_INFO("Config__DialogProc: WM_COMMAND Control=%d", Control);
 		if (Control == ID_OK)
 		{
+			LOG_INFO("Config__DialogProc: ID_OK clicked");
 			// capture
 			C->MouseCursor              = IsDlgButtonChecked(Window, ID_MOUSE_CURSOR);
 			C->OnlyClientArea           = IsDlgButtonChecked(Window, ID_ONLY_CLIENT_AREA);
@@ -505,6 +524,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			C->FragmentedOutput  = IsDlgButtonChecked(Window, ID_FRAGMENTED_MP4);
 			C->EnableLimitLength = IsDlgButtonChecked(Window, ID_LIMIT_LENGTH);
 			C->EnableLimitSize   = IsDlgButtonChecked(Window, ID_LIMIT_SIZE);
+			C->EnableLog         = IsDlgButtonChecked(Window, ID_ENABLE_LOG);
 			C->LimitLength       = GetDlgItemInt(Window,      ID_LIMIT_LENGTH + 1, NULL, FALSE);
 			C->LimitSize         = GetDlgItemInt(Window,      ID_LIMIT_SIZE + 1,   NULL, FALSE);
 			// video
@@ -519,6 +539,8 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			// audio
 			C->CaptureAudio          = IsDlgButtonChecked(Window, ID_AUDIO_CAPTURE);
 			C->ApplicationLocalAudio = IsDlgButtonChecked(Window, ID_AUDIO_APPLICATION_LOCAL);
+			C->CaptureMicrophone     = IsDlgButtonChecked(Window, ID_AUDIO_MICROPHONE);
+			C->MicrophoneGain        = GetDlgItemInt(Window, ID_AUDIO_MIC_GAIN, NULL, FALSE);
 			C->AudioCodec            = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CODEC,    CB_GETCURSEL, 0, 0);
 			C->AudioChannels         = (DWORD)SendDlgItemMessageW(Window, ID_AUDIO_CHANNELS, CB_GETCURSEL, 0, 0) + 1;
 			C->AudioSamplerate       = gAudioSamplerates[SendDlgItemMessageW(Window, ID_AUDIO_SAMPLERATE, CB_GETCURSEL, 0, 0)];
@@ -581,6 +603,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		}
 		else if (Control == ID_OUTPUT_FOLDER + 1)
 		{
+			LOG_INFO("Config__DialogProc: Browse folder button clicked");
 			// this expects caller has called CoInitializeEx with single or apartment-threaded model
 			IFileDialog* Dialog;
 			HR(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC, &IID_IFileDialog, &Dialog));
@@ -596,8 +619,10 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 			}
 
 			HR(IFileDialog_SetOptions(Dialog, FOS_NOCHANGEDIR | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST));
+			LOG_INFO("Config__DialogProc: Calling IFileDialog_Show (blocking)...");
 			if (SUCCEEDED(IFileDialog_Show(Dialog, Window)) && SUCCEEDED(IFileDialog_GetResult(Dialog, &Folder)))
 			{
+				LOG_INFO("Config__DialogProc: IFileDialog_Show returned successfully");
 				LPWSTR Path;
 				if (SUCCEEDED(IShellItem_GetDisplayName(Folder, SIGDN_FILESYSPATH, &Path)))
 				{
@@ -614,6 +639,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 		          Control == ID_SHORTCUT_WINDOW ||
 		          Control == ID_SHORTCUT_REGION) && HIWORD(WParam) == BN_CLICKED)
 		{
+			LOG_INFO("Config__DialogProc: shortcut button %d clicked", Control);
 			if (gConfigShortcut.Control == 0)
 			{
 				SetDlgItemTextW(Window, Control, L"Press new shortcut, [ESC] to cancel, [BACKSPACE] to disable");
@@ -625,6 +651,7 @@ static LRESULT CALLBACK Config__DialogProc(HWND Window, UINT Message, WPARAM WPa
 				gConfigShortcut.WindowProc = (WNDPROC)GetWindowLongPtrW(ControlWindow, GWLP_WNDPROC);
 				SetWindowLongPtrW(ControlWindow, GWLP_WNDPROC, (LONG_PTR)&Config__ShortcutProc);
 				DisableHotKeys();
+				LOG_INFO("Config__DialogProc: entering shortcut capture mode");
 			}
 		}
 	}
@@ -875,6 +902,8 @@ void Config_Defaults(Config* C)
 		// audio
 		.CaptureAudio = TRUE,
 		.ApplicationLocalAudio = TRUE,
+		.CaptureMicrophone = TRUE,
+		.MicrophoneGain = 100,
 		.AudioCodec = CONFIG_AUDIO_AAC,
 		.AudioChannels = 2,
 		.AudioSamplerate = 48000,
@@ -883,6 +912,8 @@ void Config_Defaults(Config* C)
 		.ShortcutMonitor = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL),
 		.ShortcutWindow = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_WIN),
 		.ShortcutRegion = HOT_KEY(VK_SNAPSHOT, MOD_CONTROL | MOD_SHIFT),
+		// advanced
+		.EnableLog = FALSE,
 	};
 
 	LPWSTR VideoFolder;
@@ -986,6 +1017,8 @@ void Config_Load(Config* C, LPCWSTR FileName)
 	// audio
 	Config__GetBool(FileName, L"CaptureAudio",          &C->CaptureAudio);
 	Config__GetBool(FileName, L"ApplicationLocalAudio", &C->ApplicationLocalAudio);
+	Config__GetBool(FileName, L"CaptureMicrophone",     &C->CaptureMicrophone);
+	Config__GetInt(FileName,  L"MicrophoneGain",        &C->MicrophoneGain, NULL);
 	Config__GetStr(FileName, L"AudioCodec",             &C->AudioCodec,      gAudioCodecs);
 	Config__GetInt(FileName, L"AudioChannels",          &C->AudioChannels,   (DWORD[]) { 1, 2, 0 });
 	Config__GetInt(FileName, L"AudioSamplerate",        &C->AudioSamplerate, gAudioSamplerates);
@@ -994,6 +1027,8 @@ void Config_Load(Config* C, LPCWSTR FileName)
 	Config__GetInt(FileName, L"ShortcutMonitor", &C->ShortcutMonitor, NULL);
 	Config__GetInt(FileName, L"ShortcutWindow",  &C->ShortcutWindow,  NULL);
 	Config__GetInt(FileName, L"ShortcutRect",    &C->ShortcutRegion,  NULL);
+	// advanced
+	Config__GetBool(FileName, L"EnableLog", &C->EnableLog);
 
 	Config__ValidateVideoProfile(C);
 }
@@ -1035,6 +1070,8 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	// audio
 	WritePrivateProfileStringW(INI_SECTION, L"CaptureAudio",          C->CaptureAudio          ? L"1" : L"0", FileName);
 	WritePrivateProfileStringW(INI_SECTION, L"ApplicationLocalAudio", C->ApplicationLocalAudio ? L"1" : L"0", FileName);
+	WritePrivateProfileStringW(INI_SECTION, L"CaptureMicrophone",     C->CaptureMicrophone     ? L"1" : L"0", FileName);
+	Config__WriteInt(FileName, L"MicrophoneGain", C->MicrophoneGain);
 	WritePrivateProfileStringW(INI_SECTION, L"AudioCodec", gAudioCodecs[C->AudioCodec], FileName);
 	Config__WriteInt(FileName, L"AudioChannels",   C->AudioChannels);
 	Config__WriteInt(FileName, L"AudioSamplerate", C->AudioSamplerate);
@@ -1043,12 +1080,16 @@ void Config_Save(Config* C, LPCWSTR FileName)
 	Config__WriteInt(FileName, L"ShortcutMonitor", C->ShortcutMonitor);
 	Config__WriteInt(FileName, L"ShortcutWindow",  C->ShortcutWindow);
 	Config__WriteInt(FileName, L"ShortcutRect",    C->ShortcutRegion);
+	// advanced
+	WritePrivateProfileStringW(INI_SECTION, L"EnableLog", C->EnableLog ? L"1" : L"0", FileName);
 }
 
 BOOL Config_ShowDialog(Config* C)
 {
+	LOG_INFO("Config_ShowDialog: entering (gDialogWindow=%p)", gDialogWindow);
 	if (gDialogWindow)
 	{
+		LOG_INFO("Config_ShowDialog: dialog already open, bringing to foreground");
 		SetForegroundWindow(gDialogWindow);
 		return FALSE;
 	}
@@ -1084,6 +1125,7 @@ BOOL Config_ShowDialog(Config* C)
 					{ "Fragmented MP&4 (H264 only)", ID_FRAGMENTED_MP4, ITEM_CHECKBOX                   },
 					{ "Limit &Length (seconds)",     ID_LIMIT_LENGTH,   ITEM_CHECKBOX | ITEM_NUMBER, 80 },
 					{ "Limit &Size (MB)",            ID_LIMIT_SIZE,     ITEM_CHECKBOX | ITEM_NUMBER, 80 },
+					{ "Enable &Log File",            ID_ENABLE_LOG,     ITEM_CHECKBOX                   },
 					{ NULL },
 				},
 			},
@@ -1110,6 +1152,8 @@ BOOL Config_ShowDialog(Config* C)
 				{
 					{ "Capture Au&dio",           ID_AUDIO_CAPTURE,           ITEM_CHECKBOX     },
 					{ "Applicatio&n Local Audio", ID_AUDIO_APPLICATION_LOCAL, ITEM_CHECKBOX     },
+					{ "Capture &Microphone",      ID_AUDIO_MICROPHONE,        ITEM_CHECKBOX     },
+					{ "Microphone &Gain (%)",     ID_AUDIO_MIC_GAIN,          ITEM_NUMBER,   60 },
 					{ "Codec",                    ID_AUDIO_CODEC,             ITEM_COMBOBOX, 60 },
 					{ "Channels",                 ID_AUDIO_CHANNELS,          ITEM_COMBOBOX, 60 },
 					{ "Samplerate",               ID_AUDIO_SAMPLERATE,        ITEM_COMBOBOX, 60 },
@@ -1135,5 +1179,8 @@ BOOL Config_ShowDialog(Config* C)
 	BYTE __declspec(align(4)) Data[4096];
 	Config__DoDialogLayout(&Dialog, Data, sizeof(Data));
 
-	return (BOOL)DialogBoxIndirectParamW(GetModuleHandleW(NULL), (LPCDLGTEMPLATEW)Data, NULL, Config__DialogProc, (LPARAM)C);
+	LOG_INFO("Config_ShowDialog: calling DialogBoxIndirectParamW (blocking)...");
+	BOOL Result = (BOOL)DialogBoxIndirectParamW(GetModuleHandleW(NULL), (LPCDLGTEMPLATEW)Data, NULL, Config__DialogProc, (LPARAM)C);
+	LOG_INFO("Config_ShowDialog: DialogBoxIndirectParamW returned %d", Result);
+	return Result;
 }

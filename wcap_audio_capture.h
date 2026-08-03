@@ -2,6 +2,7 @@
 
 #include "wcap.h"
 #include <audioclient.h>
+#include <mfapi.h>
 
 //
 // interface
@@ -18,6 +19,14 @@ typedef struct
 	uint64_t Freq;
 	bool UseDeviceTimestamp;
 	bool CheckDeviceTimestamp;
+
+	// microphone capture
+	IAudioClient* MicClient;
+	IAudioCaptureClient* MicCaptureClient;
+	HANDLE MicEvent;
+	WAVEFORMATEX* MicFormat;
+	float MicGain;
+	bool MicEnabled;
 
 	bool Stop;
 	HANDLE Event;
@@ -41,7 +50,9 @@ AudioCaptureData;
 static bool AudioCapture_CanCaptureApplicationLocal(void);
 
 // make sure CoInitializeEx has been called before calling Start()
-static bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow);
+// CaptureMicrophone: enable mic capture and mix into loopback audio
+// MicrophoneGain: gain multiplier (1.0 = 100%, 0.5 = 50%, 2.0 = 200%)
+static bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow, bool CaptureMicrophone, float MicrophoneGain);
 static void AudioCapture_Stop(AudioCapture* Capture);
 static void AudioCapture_Flush(AudioCapture* Capture);
 
@@ -129,9 +140,195 @@ static IActivateAudioInterfaceCompletionHandlerVtbl AudioCaptureActivateVtbl =
 	.ActivateCompleted = &AudioCaptureActivate__ActivateCompleted,
 };
 
+// Helper: convert audio sample to float (for mixing)
+static float AudioCapture__SampleToFloat(const BYTE* Sample, WORD BitsPerSample, bool IsFloat)
+{
+	if (IsFloat)
+	{
+		if (BitsPerSample == 32)
+		{
+			return *(const float*)Sample;
+		}
+		else if (BitsPerSample == 64)
+		{
+			return (float)(*(const double*)Sample);
+		}
+	}
+	else
+	{
+		if (BitsPerSample == 16)
+		{
+			return (float)(*(const INT16*)Sample) / 32768.0f;
+		}
+		else if (BitsPerSample == 24)
+		{
+			INT32 Val = (INT32)(Sample[0] | (Sample[1] << 8) | (Sample[2] << 16));
+			if (Val & 0x800000) Val |= 0xFF000000; // sign extend
+			return (float)Val / 8388608.0f;
+		}
+		else if (BitsPerSample == 32)
+		{
+			return (float)(*(const INT32*)Sample) / 2147483648.0f;
+		}
+	}
+	return 0.0f;
+}
+
+// Helper: convert float to audio sample
+static void AudioCapture__FloatToSample(BYTE* Sample, float Value, WORD BitsPerSample, bool IsFloat)
+{
+	// clamp
+	if (Value > 1.0f) Value = 1.0f;
+	if (Value < -1.0f) Value = -1.0f;
+
+	if (IsFloat)
+	{
+		if (BitsPerSample == 32)
+		{
+			*(float*)Sample = Value;
+		}
+		else if (BitsPerSample == 64)
+		{
+			*(double*)Sample = (double)Value;
+		}
+	}
+	else
+	{
+		if (BitsPerSample == 16)
+		{
+			*(INT16*)Sample = (INT16)(Value * 32767.0f);
+		}
+		else if (BitsPerSample == 24)
+		{
+			INT32 Val = (INT32)(Value * 8388607.0f);
+			Sample[0] = (BYTE)(Val & 0xFF);
+			Sample[1] = (BYTE)((Val >> 8) & 0xFF);
+			Sample[2] = (BYTE)((Val >> 16) & 0xFF);
+		}
+		else if (BitsPerSample == 32)
+		{
+			*(INT32*)Sample = (INT32)(Value * 2147483647.0f);
+		}
+	}
+}
+
+// Helper: check if format is float
+static bool AudioCapture__IsFloatFormat(const WAVEFORMATEX* Format)
+{
+	if (Format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
+	{
+		return true;
+	}
+	if (Format->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+	{
+		const WAVEFORMATEXTENSIBLE* Ex = (const WAVEFORMATEXTENSIBLE*)Format;
+		return IsEqualGUID(&Ex->SubFormat, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+	}
+	return false;
+}
+
+// Helper: read mic frames, resample to loopback format, and mix into loopback buffer
+static void AudioCapture__MixMic(AudioCapture* Capture, BYTE* LoopbackBuffer, UINT32 LoopbackFrames)
+{
+	if (!Capture->MicEnabled || !Capture->MicCaptureClient)
+	{
+		return;
+	}
+
+	// read available mic frames
+	BYTE* MicBuffer = NULL;
+	DWORD MicFlags = 0;
+	UINT32 MicFrames = 0;
+	UINT64 MicPosition = 0;
+	UINT64 MicTimestamp = 0;
+
+	HRESULT hr = IAudioCaptureClient_GetBuffer(Capture->MicCaptureClient, &MicBuffer, &MicFrames, &MicFlags, &MicPosition, &MicTimestamp);
+	if (FAILED(hr))
+	{
+		return;
+	}
+	if (MicFrames == 0)
+	{
+		return;
+	}
+
+	// Simple software resampler: convert mic format to loopback format and mix
+	// This handles sample rate conversion, channel count conversion, and format conversion
+	
+	bool LoopbackIsFloat = AudioCapture__IsFloatFormat(Capture->Format);
+	WORD LoopbackBits = Capture->Format->wBitsPerSample;
+	UINT32 LoopbackChannels = Capture->Format->nChannels;
+	UINT32 LoopbackSampleRate = Capture->Format->nSamplesPerSec;
+	
+	bool MicIsFloat = AudioCapture__IsFloatFormat(Capture->MicFormat);
+	WORD MicBits = Capture->MicFormat->wBitsPerSample;
+	UINT32 MicChannels = Capture->MicFormat->nChannels;
+	UINT32 MicSampleRate = Capture->MicFormat->nSamplesPerSec;
+
+	// Calculate how many loopback frames correspond to the mic frames
+	// mic_frames / mic_rate = loopback_frames / loopback_rate
+	// loopback_frames = mic_frames * loopback_rate / mic_rate
+	UINT32 ResampledFrames = (UINT32)((UINT64)MicFrames * LoopbackSampleRate / MicSampleRate);
+	if (ResampledFrames > LoopbackFrames)
+	{
+		ResampledFrames = LoopbackFrames;
+	}
+
+	// Mix resampled mic into loopback buffer
+	for (UINT32 i = 0; i < ResampledFrames; i++)
+	{
+		// Find corresponding mic frame using linear interpolation
+		float MicFramePos = (float)i * MicSampleRate / LoopbackSampleRate;
+		UINT32 MicFrameIndex = (UINT32)MicFramePos;
+		float Frac = MicFramePos - MicFrameIndex;
+
+		if (MicFrameIndex >= MicFrames - 1)
+		{
+			MicFrameIndex = MicFrames - 1;
+			Frac = 0.0f;
+		}
+
+		for (UINT32 ch = 0; ch < LoopbackChannels; ch++)
+		{
+			// Get loopback sample
+			float LoopbackSample = AudioCapture__SampleToFloat(
+				LoopbackBuffer + i * Capture->Format->nBlockAlign + ch * (LoopbackBits / 8),
+				LoopbackBits, LoopbackIsFloat);
+
+			// Get mic sample (handle mono->stereo by duplicating)
+			UINT32 MicCh = (ch < MicChannels) ? ch : 0;
+			
+			float MicSample0 = AudioCapture__SampleToFloat(
+				MicBuffer + MicFrameIndex * Capture->MicFormat->nBlockAlign + MicCh * (MicBits / 8),
+				MicBits, MicIsFloat);
+			
+			float MicSample1 = MicSample0;
+			if (MicFrameIndex + 1 < MicFrames)
+			{
+				MicSample1 = AudioCapture__SampleToFloat(
+					MicBuffer + (MicFrameIndex + 1) * Capture->MicFormat->nBlockAlign + MicCh * (MicBits / 8),
+					MicBits, MicIsFloat);
+			}
+
+			// Linear interpolation
+			float MicSample = MicSample0 + (MicSample1 - MicSample0) * Frac;
+
+			// Mix with gain
+			float Mixed = LoopbackSample + MicSample * Capture->MicGain;
+			
+			AudioCapture__FloatToSample(
+				LoopbackBuffer + i * Capture->Format->nBlockAlign + ch * (LoopbackBits / 8),
+				Mixed, LoopbackBits, LoopbackIsFloat);
+		}
+	}
+
+	IAudioCaptureClient_ReleaseBuffer(Capture->MicCaptureClient, MicFrames);
+}
+
 static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 {
 	AudioCapture* Capture = Arg;
+	LOG_INFO("AudioCapture__Thread: started (tid=%lu, mic=%d, mic_event=%p)", GetCurrentThreadId(), Capture->MicEnabled, (void*)Capture->MicEvent);
 
 	DWORD Task = 0;
 	HANDLE Handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &Task);
@@ -143,18 +340,36 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 	uint32_t BufferWrite = 0;
 	HANDLE Event = Capture->Event;
 
-	while (WaitForSingleObject(Event, INFINITE) == WAIT_OBJECT_0)
+	// set up event array for WaitForMultipleObjects
+	HANDLE Events[2];
+	DWORD EventCount = 1;
+	Events[0] = Event;
+	if (Capture->MicEnabled && Capture->MicEvent)
+	{
+		Events[1] = Capture->MicEvent;
+		EventCount = 2;
+		LOG_INFO("AudioCapture__Thread: waiting on 2 events (loopback + mic)");
+	}
+	else
+	{
+		LOG_INFO("AudioCapture__Thread: waiting on 1 event (loopback only)");
+	}
+
+	while (WaitForMultipleObjects(EventCount, Events, FALSE, INFINITE) != WAIT_FAILED)
 	{
 		if (Capture->Stop)
 		{
+			LOG_INFO("AudioCapture__Thread: stop flag set, exiting loop");
 			break;
 		}
 
+		// read loopback data
 		BYTE* Buffer = NULL;
 		DWORD Flags = 0;
 		UINT32 Frames = 0;
 		UINT64 Position = 0; // in sample count from beginning of stream
-		UINT64 Timestamp = 0; // in QPC unuts
+		UINT64 Timestamp = 0; // in QPC units
+
 		while (SUCCEEDED(IAudioCaptureClient_GetBuffer(CaptureClient, &Buffer, &Frames, &Flags, &Position, &Timestamp)) && Frames != 0)
 		{
 			uint32_t BufferAvailable = BufferSize - (BufferWrite - atomic_load_explicit(&Capture->BufferRead, memory_order_relaxed));
@@ -166,13 +381,22 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 				CopyMemory(BufferPtr, &Frames, sizeof(Frames)); BufferPtr += sizeof(Frames);
 				CopyMemory(BufferPtr, &Position, sizeof(Position)); BufferPtr += sizeof(Position);
 				CopyMemory(BufferPtr, &Timestamp, sizeof(Timestamp)); BufferPtr += sizeof(Timestamp);
+
+				// copy loopback data to temp buffer for mixing
+				BYTE* MixedBuffer = (BYTE*)BufferPtr;
 				if (Flags & AUDCLNT_BUFFERFLAGS_SILENT)
 				{
-					ZeroMemory(BufferPtr, Frames * BytesPerFrame);
+					ZeroMemory(MixedBuffer, Frames * BytesPerFrame);
 				}
 				else
 				{
-					CopyMemory(BufferPtr, Buffer, Frames * BytesPerFrame);
+					CopyMemory(MixedBuffer, Buffer, Frames * BytesPerFrame);
+				}
+
+				// mix mic data if enabled
+				if (Capture->MicEnabled)
+				{
+					AudioCapture__MixMic(Capture, MixedBuffer, Frames);
 				}
 
 				BufferWrite += WriteSize;
@@ -180,7 +404,13 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 			}
 			else
 			{
-				// TODO: logging/stats when audio ringbuffer is overflowing
+				// throttle: this can fire every few msec when the encoder stalls
+				static uint32_t OverflowCount;
+				OverflowCount++;
+				if (OverflowCount <= 3 || (OverflowCount % 1000) == 0)
+				{
+					LOG_WARN("AudioCapture__Thread: ringbuffer overflow! available=%u needed=%u (total %u)", BufferAvailable, WriteSize, OverflowCount);
+				}
 			}
 
 			HR(IAudioCaptureClient_ReleaseBuffer(CaptureClient, Frames));
@@ -193,12 +423,23 @@ static DWORD CALLBACK AudioCapture__Thread(LPVOID Arg)
 	
 	AvRevertMmThreadCharacteristics(Handle);
 
+	LOG_INFO("AudioCapture__Thread: exiting");
 	return 0;
 }
 
-bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
+bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow, bool CaptureMicrophone, float MicrophoneGain)
 {
+	LOG_INFO("AudioCapture_Start: app_window=%p, mic=%d, gain=%.2f", (void*)ApplicationWindow, CaptureMicrophone, MicrophoneGain);
+
 	bool Result = false;
+
+	// initialize mic fields
+	Capture->MicClient = NULL;
+	Capture->MicCaptureClient = NULL;
+	Capture->MicEvent = NULL;
+	Capture->MicFormat = NULL;
+	Capture->MicGain = MicrophoneGain;
+	Capture->MicEnabled = false;
 
 	if (ApplicationWindow)
 	{
@@ -339,6 +580,108 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 			Capture->CheckDeviceTimestamp = true;
 		}
 
+		// microphone capture (only for monitor/region capture, not application-local)
+		if (CaptureMicrophone)
+		{
+			LOG_INFO("AudioCapture_Start: attempting to initialize microphone capture...");
+			IMMDevice* MicDevice = NULL;
+			if (SUCCEEDED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(Enumerator, eCapture, eConsole, &MicDevice)))
+			{
+				LOG_INFO("AudioCapture_Start: got default capture device");
+				IAudioClient* MicClient = NULL;
+				if (SUCCEEDED(IMMDevice_Activate(MicDevice, &IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&MicClient)))
+				{
+					LOG_INFO("AudioCapture_Start: activated mic audio client");
+					WAVEFORMATEX* MicFormat = NULL;
+					if (SUCCEEDED(IAudioClient_GetMixFormat(MicClient, &MicFormat)))
+					{
+						LOG_INFO("AudioCapture_Start: got mic format: %luHz %luch %lubps", MicFormat->nSamplesPerSec, MicFormat->nChannels, MicFormat->wBitsPerSample);
+						REFERENCE_TIME DefaultPeriod, MinimumPeriod;
+						if (SUCCEEDED(IAudioClient_GetDevicePeriod(MicClient, &DefaultPeriod, &MinimumPeriod)))
+						{
+							DWORD MicFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+							if (SUCCEEDED(IAudioClient_Initialize(MicClient, AUDCLNT_SHAREMODE_SHARED, MicFlags, DefaultPeriod, 0, MicFormat, NULL)))
+							{
+								LOG_INFO("AudioCapture_Start: initialized mic client");
+								IAudioCaptureClient* MicCaptureClient = NULL;
+								if (SUCCEEDED(IAudioClient_GetService(MicClient, &IID_IAudioCaptureClient, (void**)&MicCaptureClient)))
+								{
+									LOG_INFO("AudioCapture_Start: got mic capture client");
+									Capture->MicClient = MicClient;
+									Capture->MicCaptureClient = MicCaptureClient;
+									Capture->MicFormat = MicFormat;
+									Capture->MicEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+									if (Capture->MicEvent)
+									{
+										HR(IAudioClient_SetEventHandle(MicClient, Capture->MicEvent));
+
+										// Software resampler is used in AudioCapture__MixMic
+										// No need for MF resampler MFT
+										Capture->MicEnabled = true;
+										LOG_INFO("AudioCapture_Start: microphone capture enabled (software resampler): %luHz/%luch -> %luHz/%luch",
+											MicFormat->nSamplesPerSec, MicFormat->nChannels,
+											Capture->Format->nSamplesPerSec, Capture->Format->nChannels);
+									}
+									else
+									{
+										LOG_ERROR("AudioCapture_Start: failed to create mic event");
+									}
+								}
+								else
+								{
+									LOG_ERROR("AudioCapture_Start: failed to get mic capture client");
+								}
+							}
+							else
+							{
+								LOG_ERROR("AudioCapture_Start: failed to initialize mic client");
+							}
+						}
+						else
+						{
+							LOG_ERROR("AudioCapture_Start: failed to get mic device period");
+						}
+					if (!Capture->MicEnabled)
+					{
+						CoTaskMemFree(MicFormat);
+					}
+				}
+				else
+				{
+					LOG_ERROR("AudioCapture_Start: failed to get mic mix format");
+				}
+				if (!Capture->MicEnabled)
+				{
+					if (Capture->MicCaptureClient)
+					{
+						IAudioCaptureClient_Release(Capture->MicCaptureClient);
+						Capture->MicCaptureClient = NULL;
+					}
+					if (Capture->MicEvent)
+					{
+						CloseHandle(Capture->MicEvent);
+						Capture->MicEvent = NULL;
+					}
+					IAudioClient_Release(MicClient);
+				}
+				}
+				else
+				{
+					LOG_ERROR("AudioCapture_Start: failed to activate mic device");
+				}
+				IMMDevice_Release(MicDevice);
+			}
+			else
+			{
+				LOG_ERROR("AudioCapture_Start: failed to get default capture device");
+			}
+			if (!Capture->MicEnabled)
+			{
+				LOG_WARN("AudioCapture_Start: microphone capture requested but failed to initialize");
+			}
+		}
+
 		Result = true;
 
 		IMMDevice_Release(Device);
@@ -392,6 +735,12 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 		HR(IAudioClient_SetEventHandle(Capture->RecordClient, Capture->Event));
 		HR(IAudioClient_Start(Capture->RecordClient));
 
+		// start mic client if enabled
+		if (Capture->MicEnabled)
+		{
+			HR(IAudioClient_Start(Capture->MicClient));
+		}
+
 		LARGE_INTEGER Start;
 		QueryPerformanceCounter(&Start);
 		Capture->StartQpc = Start.QuadPart;
@@ -399,6 +748,10 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 		LARGE_INTEGER Freq;
 		QueryPerformanceFrequency(&Freq);
 		Capture->Freq = Freq.QuadPart;
+
+		LOG_INFO("AudioCapture_Start: thread started, buffer_size=%u format: rate=%lu channels=%lu blockalign=%lu mic=%d",
+			Capture->BufferSize, Capture->Format->nSamplesPerSec, Capture->Format->nChannels, Capture->Format->nBlockAlign, Capture->MicEnabled);
+		Result = true;
 	}
 
 	return Result;
@@ -406,9 +759,28 @@ bool AudioCapture_Start(AudioCapture* Capture, HWND ApplicationWindow)
 
 void AudioCapture_Stop(AudioCapture* Capture)
 {
+	LOG_INFO("AudioCapture_Stop: setting stop flag and signaling event");
 	Capture->Stop = true;
 	SetEvent(Capture->Event);
-	WaitForSingleObject(Capture->Thread, INFINITE);
+	if (Capture->MicEvent)
+	{
+		SetEvent(Capture->MicEvent);
+	}
+
+	LOG_INFO("AudioCapture_Stop: waiting for thread to exit...");
+	DWORD WaitResult = WaitForSingleObject(Capture->Thread, 5000); // 5 second timeout
+	if (WaitResult == WAIT_TIMEOUT)
+	{
+		LOG_ERROR("AudioCapture_Stop: thread did not exit within 5 seconds!");
+	}
+	else if (WaitResult == WAIT_FAILED)
+	{
+		LOG_ERROR("AudioCapture_Stop: WaitForSingleObject failed: %lu", GetLastError());
+	}
+	else
+	{
+		LOG_INFO("AudioCapture_Stop: thread exited normally");
+	}
 
 	CloseHandle(Capture->Thread);
 	CloseHandle(Capture->Event);
@@ -424,15 +796,43 @@ void AudioCapture_Stop(AudioCapture* Capture)
 	}
 	IAudioCaptureClient_Release(Capture->CaptureClient);
 	IAudioClient_Release(Capture->RecordClient);
+
+	// cleanup mic resources
+	if (Capture->MicClient)
+	{
+		IAudioClient_Release(Capture->MicClient);
+		Capture->MicClient = NULL;
+	}
+	if (Capture->MicCaptureClient)
+	{
+		IAudioCaptureClient_Release(Capture->MicCaptureClient);
+		Capture->MicCaptureClient = NULL;
+	}
+	if (Capture->MicEvent)
+	{
+		CloseHandle(Capture->MicEvent);
+		Capture->MicEvent = NULL;
+	}
+	if (Capture->MicFormat)
+	{
+		CoTaskMemFree(Capture->MicFormat);
+		Capture->MicFormat = NULL;
+	}
+	Capture->MicEnabled = false;
 }
 
 void AudioCapture_Flush(AudioCapture* Capture)
 {
+	LOG_INFO("AudioCapture_Flush: stopping audio clients");
 	if (Capture->PlayClient)
 	{
 		HR(IAudioClient_Stop(Capture->PlayClient));
 	}
 	HR(IAudioClient_Stop(Capture->RecordClient));
+	if (Capture->MicClient)
+	{
+		HR(IAudioClient_Stop(Capture->MicClient));
+	}
 }
 
 bool AudioCapture_GetData(AudioCapture* Capture, AudioCaptureData* Data, uint64_t ExpectedTimestamp)

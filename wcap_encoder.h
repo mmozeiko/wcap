@@ -16,6 +16,33 @@
 #define ENCODER_VIDEO_BUFFER_COUNT 8
 #define ENCODER_AUDIO_BUFFER_COUNT 16
 
+// max number of samples/ticks waiting to be submitted to sink writer by encoder thread
+// must be power of two, actual in-flight sample count is limited by buffer counts above
+#define ENCODER_QUEUE_COUNT 64
+
+// max time the stop sequence waits for a congested encoder to make progress in each
+// phase before abandoning remaining audio / discarding the queued backlog, so that
+// stopping the recording cannot hang the UI thread indefinitely
+#define ENCODER_STOP_WAIT_TIMEOUT_MS 10000
+
+typedef struct
+{
+	IMFSample* Sample;         // sample to write, or NULL for stream tick / stop command
+	IMFTrackedSample* Tracked; // released after WriteSample (audio only), NULL otherwise
+	int StreamIndex;           // -1 = stop command (writer thread exits)
+	LONGLONG Tick;             // stream tick timestamp, used only when Sample == NULL
+}
+EncoderQueueItem;
+
+// single producer (main thread), single consumer (writer thread) ringbuffer queue
+typedef struct
+{
+	EncoderQueueItem Items[ENCODER_QUEUE_COUNT];
+	_Atomic(uint32_t) Read;
+	_Atomic(uint32_t) Write;
+}
+EncoderQueue;
+
 typedef struct
 {
 	DWORD InputWidth;   // width to what input will be cropped
@@ -33,6 +60,17 @@ typedef struct
 	IMFSinkWriter* Writer;
 	int VideoStreamIndex;
 	int AudioStreamIndex;
+
+	// writer threads do all blocking IMFSinkWriter calls (WriteSample/SendStreamTick)
+	// separate video & audio queues/threads so a congested video encoder cannot stall audio
+	HANDLE VideoThread;
+	HANDLE AudioThread; // NULL when there is no audio stream
+	EncoderQueue VideoQueue;
+	EncoderQueue AudioQueue;
+
+	// when set, writer threads release queued items without writing them to the sink writer
+	// (set by the stop sequence when the encoder is too congested to drain the backlog)
+	_Atomic(uint32_t) DiscardQueued;
 
 	ID3D11RenderTargetView* InputView;
 
@@ -53,6 +91,10 @@ typedef struct
 	IMFSample*      AudioInputSample;
 	DWORD           AudioFrameSize;
 	DWORD           AudioSampleRate;
+
+	// video stall detection (informational only): track last time a video buffer was returned
+	_Atomic(uint64_t) VideoLastReturnTime; // QPC timestamp of last video buffer return
+	UINT64            VideoStallTimeout;   // max ticks without video buffer return before stall
 }
 Encoder;
 
@@ -73,7 +115,7 @@ static void Encoder_Stop(Encoder* Encoder);
 
 static BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UINT64 Time, UINT64 TimePeriod);
 static void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod);
-static void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod);
+static BOOL Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod);
 static void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize);
 
 //
@@ -83,11 +125,17 @@ static void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec
 #include <evr.h>
 #include <cguid.h>
 #include <mfapi.h>
+#include <mftransform.h>
 #include <mferror.h>
 #include <codecapi.h>
 #include <wmcodecdsp.h>
 
 #define MFT64(high, low) (((UINT64)high << 32) | (low))
+
+// counters for throttled callback logging (first 3, then every Nth)
+static _Atomic(uint64_t) gEncoderVideoInvokeCount;
+static _Atomic(uint64_t) gEncoderAudioInvokeCount;
+static _Atomic(uint64_t) gEncoderAudioSubmitCount;
 
 static HRESULT STDMETHODCALLTYPE Encoder__QueryInterface(IMFAsyncCallback* this, REFIID riid, void** Object)
 {
@@ -127,15 +175,35 @@ static HRESULT STDMETHODCALLTYPE Encoder__VideoInvoke(IMFAsyncCallback* this, IM
 	IUnknown* Object;
 	IMFSample* Sample;
 
-	HR(IMFAsyncResult_GetObject(Result, &Object));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample));
+	HRESULT hr = IMFAsyncResult_GetObject(Result, &Object);
+	if (FAILED(hr))
+	{
+		LOG_ERROR("Encoder__VideoInvoke: IMFAsyncResult_GetObject failed: 0x%08lX", (unsigned long)hr);
+		return hr;
+	}
+	hr = IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample);
 	IUnknown_Release(Object);
+	if (FAILED(hr))
+	{
+		LOG_ERROR("Encoder__VideoInvoke: QueryInterface for IMFSample failed: 0x%08lX", (unsigned long)hr);
+		return hr;
+	}
 	// keep Sample object reference count incremented to reuse for new frame submission
 
 	for (size_t Index = 0; Index < ARRAYSIZE(Enc->VideoSample); Index++)
 	{
 		if (Sample == Enc->VideoSample[Index])
 		{
+			uint64_t Count = atomic_fetch_add(&gEncoderVideoInvokeCount, 1);
+			if (Count < 3 || (Count % 100) == 0)
+			{
+				LOG_INFO("Encoder__VideoInvoke: video buffer %zu returned (total %llu)", Index, Count + 1);
+			}
+			// record time of last video buffer return for stall detection
+			LARGE_INTEGER Now;
+			QueryPerformanceCounter(&Now);
+			atomic_store(&Enc->VideoLastReturnTime, (uint64_t)Now.QuadPart);
+
 			atomic_fetch_or(&Enc->VideoSampleAvailable, 1ULL << Index);
 			WakeByAddressSingle((PVOID)&Enc->VideoSampleAvailable);
 			break;
@@ -152,15 +220,30 @@ static HRESULT STDMETHODCALLTYPE Encoder__AudioInvoke(IMFAsyncCallback* this, IM
 	IUnknown* Object;
 	IMFSample* Sample;
 
-	HR(IMFAsyncResult_GetObject(Result, &Object));
-	HR(IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample));
+	HRESULT hr = IMFAsyncResult_GetObject(Result, &Object);
+	if (FAILED(hr))
+	{
+		LOG_ERROR("Encoder__AudioInvoke: IMFAsyncResult_GetObject failed: 0x%08lX", (unsigned long)hr);
+		return hr;
+	}
+	hr = IUnknown_QueryInterface(Object, &IID_IMFSample, (LPVOID*)&Sample);
 	IUnknown_Release(Object);
+	if (FAILED(hr))
+	{
+		LOG_ERROR("Encoder__AudioInvoke: QueryInterface for IMFSample failed: 0x%08lX", (unsigned long)hr);
+		return hr;
+	}
 	// keep Sample object reference count incremented to reuse for new sample submission
 
 	for (size_t Index = 0; Index < ARRAYSIZE(Enc->AudioSample); Index++)
 	{
 		if (Sample == Enc->AudioSample[Index])
 		{
+			uint64_t Count = atomic_fetch_add(&gEncoderAudioInvokeCount, 1);
+			if (Count < 3 || (Count % 500) == 0)
+			{
+				LOG_INFO("Encoder__AudioInvoke: audio buffer %zu returned (total %llu)", Index, Count + 1);
+			}
 			atomic_fetch_or(&Enc->AudioSampleAvailable, 1ULL << Index);
 			WakeByAddressSingle((PVOID)&Enc->AudioSampleAvailable);
 			break;
@@ -188,17 +271,200 @@ static IMFAsyncCallbackVtbl Encoder__AudioSampleCallbackVtbl =
 	.Invoke         = &Encoder__AudioInvoke,
 };
 
-static void Encoder__OutputAudioSamples(Encoder* Encoder)
+static BOOL Encoder__QueueFull(EncoderQueue* Queue)
 {
+	uint32_t Write = atomic_load_explicit(&Queue->Write, memory_order_relaxed);
+	uint32_t Read  = atomic_load_explicit(&Queue->Read, memory_order_acquire);
+	return (Write - Read) >= ENCODER_QUEUE_COUNT;
+}
+
+// caller must make sure queue is not full (single producer, so full check stays valid)
+static void Encoder__Enqueue(EncoderQueue* Queue, IMFSample* Sample, IMFTrackedSample* Tracked, int StreamIndex, LONGLONG Tick)
+{
+	uint32_t Write = atomic_load_explicit(&Queue->Write, memory_order_relaxed);
+	Queue->Items[Write & (ENCODER_QUEUE_COUNT - 1)] = (EncoderQueueItem)
+	{
+		.Sample = Sample,
+		.Tracked = Tracked,
+		.StreamIndex = StreamIndex,
+		.Tick = Tick,
+	};
+	atomic_store_explicit(&Queue->Write, Write + 1, memory_order_release);
+	WakeByAddressSingle((PVOID)&Queue->Write);
+}
+
+static BOOL Encoder__TryEnqueue(EncoderQueue* Queue, IMFSample* Sample, IMFTrackedSample* Tracked, int StreamIndex, LONGLONG Tick)
+{
+	if (Encoder__QueueFull(Queue))
+	{
+		return FALSE;
+	}
+	Encoder__Enqueue(Queue, Sample, Tracked, StreamIndex, Tick);
+	return TRUE;
+}
+
+// converts wide string to UTF-8 for logging (log file is UTF-8); %ls cannot be used
+// because conversion to the C locale fails on non-ASCII characters, and some vendor
+// MFT names contain them (Intel driver registers a corrupted friendly name containing
+// U+7C27: "Intel" + U+7C27 + " Hardware H265 Encoder MFT")
+static void Encoder__WideToUtf8(LPCWSTR Wide, char* Out, int OutSize)
+{
+	if (WideCharToMultiByte(CP_UTF8, 0, Wide, -1, Out, OutSize, NULL, NULL) == 0)
+	{
+		Out[0] = 0;
+	}
+	Out[OutSize - 1] = 0;
+}
+
+// enqueue stop command, waiting for queue space; when the encoder is congested this can
+// take a while, so after a timeout enable discarding so writer threads skip remaining items
+static void Encoder__EnqueueStopCommand(Encoder* Encoder, EncoderQueue* Queue)
+{
+	DWORD WaitStart = GetTickCount();
+	while (!Encoder__TryEnqueue(Queue, NULL, NULL, -1, 0))
+	{
+		if (GetTickCount() - WaitStart >= ENCODER_STOP_WAIT_TIMEOUT_MS)
+		{
+			atomic_store_explicit(&Encoder->DiscardQueued, 1, memory_order_release);
+		}
+		uint32_t Read = atomic_load_explicit(&Queue->Read, memory_order_acquire);
+		WaitOnAddress((PVOID)&Queue->Read, &Read, sizeof(Read), 100);
+	}
+}
+
+// wait for tracked sample callbacks to return all buffers, they fire asynchronously on MF workqueue threads
+static BOOL Encoder__WaitForCallbacks(_Atomic(uint64_t)* Available, uint64_t FullMask, DWORD TimeoutMs)
+{
+	DWORD Start = GetTickCount();
 	for (;;)
 	{
-		// we don't want to drop any audio frames, so wait for available sample/buffer
+		uint64_t Value = atomic_load(Available);
+		if ((Value & FullMask) == FullMask)
+		{
+			return TRUE;
+		}
+		DWORD Elapsed = GetTickCount() - Start;
+		if (Elapsed >= TimeoutMs)
+		{
+			return FALSE;
+		}
+		WaitOnAddress((PVOID)Available, &Value, sizeof(Value), min(100, TimeoutMs - Elapsed));
+	}
+}
+
+// all blocking IMFSinkWriter calls happen on writer threads, so encoder MFT backpressure cannot block the main thread
+static void Encoder__WriterThread(Encoder* Encoder, EncoderQueue* Queue)
+{
+	uint32_t Discarded = 0;
+	for (;;)
+	{
+		uint32_t Read = atomic_load_explicit(&Queue->Read, memory_order_relaxed);
+		while (Read == atomic_load_explicit(&Queue->Write, memory_order_acquire))
+		{
+			WaitOnAddress((PVOID)&Queue->Write, &Read, sizeof(Read), INFINITE);
+		}
+
+		EncoderQueueItem Item = Queue->Items[Read & (ENCODER_QUEUE_COUNT - 1)];
+		atomic_store_explicit(&Queue->Read, Read + 1, memory_order_release);
+		WakeByAddressSingle((PVOID)&Queue->Read);
+
+		if (Item.StreamIndex < 0)
+		{
+			// stop command, everything submitted before it has been written
+			break;
+		}
+
+		// stop sequence gave up waiting for the congested encoder, drop queued items instead of writing them
+		BOOL Discard = atomic_load_explicit(&Encoder->DiscardQueued, memory_order_acquire) != 0;
+
+		if (Item.Sample)
+		{
+			if (Discard)
+			{
+				Discarded++;
+			}
+			else
+			{
+				// this blocks while encoder MFT is congested, which is fine on this thread
+				HRESULT hr = IMFSinkWriter_WriteSample(Encoder->Writer, Item.StreamIndex, Item.Sample);
+				if (FAILED(hr))
+				{
+					LOG_ERROR("Encoder__WriterThread: IMFSinkWriter_WriteSample (stream %d) failed: 0x%08lX", Item.StreamIndex, (unsigned long)hr);
+				}
+			}
+			IMFSample_Release(Item.Sample);
+			if (Item.Tracked)
+			{
+				IMFTrackedSample_Release(Item.Tracked);
+			}
+		}
+		else if (!Discard)
+		{
+			HRESULT hr = IMFSinkWriter_SendStreamTick(Encoder->Writer, Item.StreamIndex, Item.Tick);
+			if (FAILED(hr))
+			{
+				LOG_ERROR("Encoder__WriterThread: IMFSinkWriter_SendStreamTick failed: 0x%08lX", (unsigned long)hr);
+			}
+		}
+	}
+	if (Discarded)
+	{
+		LOG_WARN("Encoder__WriterThread: discarded %lu queued items (encoder congested)", (unsigned long)Discarded);
+	}
+}
+
+static DWORD CALLBACK Encoder__VideoThread(LPVOID Arg)
+{
+	Encoder* Encoder = Arg;
+	Encoder__WriterThread(Encoder, &Encoder->VideoQueue);
+	return 0;
+}
+
+static DWORD CALLBACK Encoder__AudioThread(LPVOID Arg)
+{
+	Encoder* Encoder = Arg;
+	Encoder__WriterThread(Encoder, &Encoder->AudioQueue);
+	return 0;
+}
+
+static void Encoder__OutputAudioSamples(Encoder* Encoder, BOOL WaitForSpace)
+{
+	DWORD WaitStart = GetTickCount();
+	for (;;)
+	{
+		// we don't want to drop any audio frames, so wait for available sample/buffer when stopping
 		uint64_t Available = atomic_load(&Encoder->AudioSampleAvailable);
 		while (Available == 0)
 		{
+			if (!WaitForSpace)
+			{
+				// encoder thread is congested, leave pending output in resampler for next call
+				return;
+			}
+			if (GetTickCount() - WaitStart >= ENCODER_STOP_WAIT_TIMEOUT_MS)
+			{
+				LOG_WARN("Encoder__OutputAudioSamples: timed out waiting for audio buffer (encoder congested), abandoning remaining audio");
+				return;
+			}
 			uint64_t Zero = 0;
-			WaitOnAddress((PVOID)&Encoder->AudioSampleAvailable, &Zero, sizeof(Zero), INFINITE);
+			WaitOnAddress((PVOID)&Encoder->AudioSampleAvailable, &Zero, sizeof(Zero), 100);
 			Available = atomic_load(&Encoder->AudioSampleAvailable);
+		}
+
+		// don't produce more output than audio writer thread queue can hold
+		while (Encoder__QueueFull(&Encoder->AudioQueue))
+		{
+			if (!WaitForSpace)
+			{
+				return;
+			}
+			if (GetTickCount() - WaitStart >= ENCODER_STOP_WAIT_TIMEOUT_MS)
+			{
+				LOG_WARN("Encoder__OutputAudioSamples: timed out waiting for audio queue space (encoder congested), abandoning remaining audio");
+				return;
+			}
+			uint32_t Read = atomic_load_explicit(&Encoder->AudioQueue.Read, memory_order_acquire);
+			WaitOnAddress((PVOID)&Encoder->AudioQueue.Read, &Read, sizeof(Read), 100);
 		}
 
 		DWORD Index;
@@ -214,7 +480,11 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 			// no output is available
 			break;
 		}
-		Assert(SUCCEEDED(hr));
+		if (FAILED(hr))
+		{
+			LOG_ERROR("Encoder__OutputAudioSamples: IMFTransform_ProcessOutput failed: 0x%08lX", (unsigned long)hr);
+			break;
+		}
 
 		atomic_fetch_and(&Encoder->AudioSampleAvailable, ~(1ULL << Index));
 
@@ -222,10 +492,14 @@ static void Encoder__OutputAudioSamples(Encoder* Encoder)
 		HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
 		HR(IMFTrackedSample_SetAllocator(Tracked, &Encoder->AudioSampleCallback, (IUnknown*)Tracked));
 
-		HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->AudioStreamIndex, Sample));
+		uint64_t SubmitCount = atomic_fetch_add(&gEncoderAudioSubmitCount, 1);
+		if (SubmitCount < 3 || (SubmitCount % 500) == 0)
+		{
+			LOG_INFO("Encoder__OutputAudioSamples: queueing audio buffer %lu for encoder thread (total %llu)", (unsigned long)Index, SubmitCount + 1);
+		}
 
-		IMFSample_Release(Sample);
-		IMFTrackedSample_Release(Tracked);
+		// audio writer thread will call WriteSample and release Sample & Tracked references
+		Encoder__Enqueue(&Encoder->AudioQueue, Sample, Tracked, Encoder->AudioStreamIndex, 0);
 	}
 }
 
@@ -238,6 +512,12 @@ void Encoder_Init(Encoder* Encoder)
 
 BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, const EncoderConfig* Config)
 {
+	LOG_INFO("Encoder_Start: input=%lux%lu output=%lux%lu fps=%lu/%lu bitrate=%lu kbps codec=%lu",
+		Config->Width, Config->Height,
+		Config->Config->VideoMaxWidth, Config->Config->VideoMaxHeight,
+		Config->FramerateNum, Config->FramerateDen,
+		Config->Config->VideoBitrate, Config->Config->VideoCodec);
+
 	ID3D11DeviceContext* Context;
 	ID3D11Device_GetImmediateContext(Device, &Context);
 
@@ -417,6 +697,15 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 		{
 			for (size_t ActivateIndex = 0; ActivateIndex != ActivateCount; ActivateIndex++)
 			{
+				LPWSTR Name;
+				UINT32 NameLength;
+				if (SUCCEEDED(IMFActivate_GetAllocatedString(Activate[ActivateIndex], &MFT_FRIENDLY_NAME_Attribute, &Name, &NameLength)))
+				{
+					char NameUtf8[256];
+					Encoder__WideToUtf8(Name, NameUtf8, sizeof(NameUtf8));
+					LOG_INFO("Video encoder MFT candidate %zu (hardware=%d): %s", ActivateIndex, Config->Config->HardwareEncoder, NameUtf8);
+					CoTaskMemFree(Name);
+				}
 				IMFActivate_Release(Activate[ActivateIndex]);
 			}
 			CoTaskMemFree(Activate);
@@ -425,6 +714,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 		if (!Ok)
 		{
+			LOG_ERROR("Cannot find video encoder (hardware=%d)", Config->Config->HardwareEncoder);
 			MessageBoxW(NULL, L"Cannot find video encoder!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
@@ -451,7 +741,11 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 			IMFDXGIDeviceManager_Release(Manager);
 		}
-		HR(IMFAttributes_SetUINT32(Attributes, &MF_SINK_WRITER_DISABLE_THROTTLING, TRUE));
+		// Throttling must stay enabled: it paces WriteSample so the audio/video encoders
+		// are not overwhelmed. Without it, audio buffers are submitted faster than the AAC
+		// encoder can process, causing all 16 buffers to get stuck within seconds.
+		// The video stall is handled by Encoder_Update stall detection + watchdog thread.
+		HR(IMFAttributes_SetUINT32(Attributes, &MF_SINK_WRITER_DISABLE_THROTTLING, FALSE));
 		HR(IMFAttributes_SetGUID(Attributes, &MF_TRANSCODE_CONTAINERTYPE, Container));
 
 		hr = MFCreateSinkWriterFromURL(FileName, NULL, Attributes, &Writer);
@@ -459,9 +753,11 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 		if (FAILED(hr))
 		{
+			LOG_ERROR("MFCreateSinkWriterFromURL failed: 0x%08lX file=%ls", (unsigned long)hr, FileName);
 			MessageBoxW(NULL, L"Cannot create output mp4 file!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
+		LOG_INFO("SinkWriter created: %ls", FileName);
 	}
 
 	// video output type
@@ -487,9 +783,11 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 		if (FAILED(hr))
 		{
+			LOG_ERROR("IMFSinkWriter_AddStream (video) failed: 0x%08lX", (unsigned long)hr);
 			MessageBoxW(NULL, L"Cannot configure video encoder!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
+		LOG_INFO("Video stream added: index=%d", Encoder->VideoStreamIndex);
 	}
 
 	// video input type, NV12 or P010 format
@@ -507,6 +805,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 		if (FAILED(hr))
 		{
+			LOG_ERROR("IMFSinkWriter_SetInputMediaType (video) failed: 0x%08lX", (unsigned long)hr);
 			MessageBoxW(NULL, L"Cannot configure video encoder input!", WCAP_TITLE, MB_ICONERROR);
 			goto bail;
 		}
@@ -595,9 +894,11 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 			if (FAILED(hr))
 			{
+				LOG_ERROR("IMFSinkWriter_AddStream (audio) failed: 0x%08lX", (unsigned long)hr);
 				MessageBoxW(NULL, L"Cannot configure audio encoder output!", WCAP_TITLE, MB_ICONERROR);
 				goto bail;
 			}
+			LOG_INFO("Audio stream added: index=%d", Encoder->AudioStreamIndex);
 		}
 
 		// audio input type
@@ -615,6 +916,7 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 
 			if (FAILED(hr))
 			{
+				LOG_ERROR("IMFSinkWriter_SetInputMediaType (audio) failed: 0x%08lX", (unsigned long)hr);
 				MessageBoxW(NULL, L"Cannot configure audio encoder input!", WCAP_TITLE, MB_ICONERROR);
 				goto bail;
 			}
@@ -624,8 +926,59 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	hr = IMFSinkWriter_BeginWriting(Writer);
 	if (FAILED(hr))
 	{
+		LOG_ERROR("IMFSinkWriter_BeginWriting failed: 0x%08lX", (unsigned long)hr);
 		MessageBoxW(NULL, L"Cannot start writing to mp4 file!", WCAP_TITLE, MB_ICONERROR);
 		goto bail;
+	}
+	LOG_INFO("SinkWriter BeginWriting OK");
+
+	// log which encoder MFT the sink writer actually selected, so the log shows whether
+	// hardware (GPU vendor) or software (Microsoft) encoder is being used
+	{
+		IMFSinkWriterEx* WriterEx;
+		HRESULT hrEx = IMFSinkWriter_QueryInterface(Writer, &IID_IMFSinkWriterEx, (LPVOID*)&WriterEx);
+		if (SUCCEEDED(hrEx))
+		{
+			IMFTransform* Transform;
+			HRESULT hrTransform = IMFSinkWriterEx_GetTransformForStream(WriterEx, Encoder->VideoStreamIndex, 0, NULL, &Transform);
+			if (SUCCEEDED(hrTransform))
+			{
+				IMFAttributes* TransformAttributes;
+				HRESULT hrAttr = IMFTransform_GetAttributes(Transform, &TransformAttributes);
+				if (SUCCEEDED(hrAttr))
+				{
+					LPWSTR Name;
+					UINT32 NameLength;
+					HRESULT hrName = IMFAttributes_GetAllocatedString(TransformAttributes, &MFT_FRIENDLY_NAME_Attribute, &Name, &NameLength);
+					if (SUCCEEDED(hrName))
+					{
+						char NameUtf8[256];
+						Encoder__WideToUtf8(Name, NameUtf8, sizeof(NameUtf8));
+						LOG_INFO("Video encoder MFT: %s", NameUtf8);
+						CoTaskMemFree(Name);
+					}
+					else
+					{
+						LOG_WARN("Video encoder MFT has no friendly name attribute: 0x%08lX", (unsigned long)hrName);
+					}
+					IMFAttributes_Release(TransformAttributes);
+				}
+				else
+				{
+					LOG_WARN("Cannot query video encoder MFT attributes: 0x%08lX", (unsigned long)hrAttr);
+				}
+				IMFTransform_Release(Transform);
+			}
+			else
+			{
+				LOG_WARN("Cannot query video encoder MFT: 0x%08lX", (unsigned long)hrTransform);
+			}
+			IMFSinkWriterEx_Release(WriterEx);
+		}
+		else
+		{
+			LOG_WARN("Cannot get IMFSinkWriterEx: 0x%08lX", (unsigned long)hrEx);
+		}
 	}
 
 	// input texture
@@ -720,9 +1073,31 @@ BOOL Encoder_Start(Encoder* Encoder, ID3D11Device* Device, LPWSTR FileName, cons
 	Encoder->Multithread = Multithread;
 
 	Encoder->StartTime = 0;
+	atomic_init(&Encoder->VideoLastReturnTime, 0);
+	atomic_init(&Encoder->DiscardQueued, 0);
+	// stall timeout: 10 seconds without a video buffer return while recording = encoder stuck
+	{
+		LARGE_INTEGER Freq;
+		QueryPerformanceFrequency(&Freq);
+		Encoder->VideoStallTimeout = 10 * (UINT64)Freq.QuadPart;
+	}
 	Encoder->Writer = Writer;
 	Writer = NULL;
 	Resampler = NULL;
+
+	atomic_init(&Encoder->VideoQueue.Read, 0);
+	atomic_init(&Encoder->VideoQueue.Write, 0);
+	atomic_init(&Encoder->AudioQueue.Read, 0);
+	atomic_init(&Encoder->AudioQueue.Write, 0);
+	Encoder->VideoThread = CreateThread(NULL, 0, &Encoder__VideoThread, Encoder, 0, NULL);
+	Assert(Encoder->VideoThread);
+	Encoder->AudioThread = NULL;
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		Encoder->AudioThread = CreateThread(NULL, 0, &Encoder__AudioThread, Encoder, 0, NULL);
+		Assert(Encoder->AudioThread);
+	}
+
 	Result = TRUE;
 
 bail:
@@ -744,14 +1119,133 @@ bail:
 
 void Encoder_Stop(Encoder* Encoder)
 {
+	LOG_INFO("Encoder_Stop: finalizing...");
+
 	if (Encoder->AudioStreamIndex >= 0)
 	{
-		HR(IMFTransform_ProcessMessage(Encoder->Resampler, MFT_MESSAGE_COMMAND_DRAIN, 0));
-		Encoder__OutputAudioSamples(Encoder);
+		LOG_INFO("Encoder_Stop: draining audio resampler...");
+		HRESULT hr = IMFTransform_ProcessMessage(Encoder->Resampler, MFT_MESSAGE_COMMAND_DRAIN, 0);
+		if (FAILED(hr))
+		{
+			LOG_ERROR("Encoder_Stop: IMFTransform_ProcessMessage(DRAIN) failed: 0x%08lX", (unsigned long)hr);
+		}
+		Encoder__OutputAudioSamples(Encoder, TRUE);
+	}
+
+	// Check buffer availability before finalization
+	uint64_t VideoAvailable = atomic_load(&Encoder->VideoSampleAvailable);
+	uint64_t AudioAvailable = (Encoder->AudioStreamIndex >= 0) ? atomic_load(&Encoder->AudioSampleAvailable) : 0;
+	LOG_INFO("Encoder_Stop: video buffers mask: 0x%016llX (expected 0x%016llX)",
+		VideoAvailable, (1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1);
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		LOG_INFO("Encoder_Stop: audio buffers mask: 0x%016llX (expected 0x%016llX)",
+			AudioAvailable, (1ULL << ENCODER_AUDIO_BUFFER_COUNT) - 1);
+	}
+
+	// Log which video buffers are still in use
+	if (VideoAvailable != ((1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1))
+	{
+		LOG_WARN("Encoder_Stop: some video buffers still in use by encoder!");
+		for (int i = 0; i < ENCODER_VIDEO_BUFFER_COUNT; i++)
+		{
+			if (!(VideoAvailable & (1ULL << i)))
+			{
+				LOG_WARN("  Video buffer %d is still pending callback", i);
+			}
+		}
+	}
+
+	// enqueue stop commands, writer threads exit after everything before it is written
+	uint32_t VideoQueued = atomic_load(&Encoder->VideoQueue.Write) - atomic_load(&Encoder->VideoQueue.Read);
+	uint32_t AudioQueued = (Encoder->AudioStreamIndex >= 0)
+		? atomic_load(&Encoder->AudioQueue.Write) - atomic_load(&Encoder->AudioQueue.Read) : 0;
+	LOG_INFO("Encoder_Stop: waiting for writer threads to drain queues (video=%lu audio=%lu queued)...",
+		(unsigned long)VideoQueued, (unsigned long)AudioQueued);
+	Encoder__EnqueueStopCommand(Encoder, &Encoder->VideoQueue);
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		Encoder__EnqueueStopCommand(Encoder, &Encoder->AudioQueue);
+	}
+
+	// wait for writer threads to finish; when the encoder is too congested to drain the backlog
+	// in reasonable time, writer threads are told to discard the remaining queued samples
+	{
+		DWORD WaitStart = GetTickCount();
+		DWORD LastLog = 0;
+		for (;;)
+		{
+			BOOL VideoDone = WaitForSingleObject(Encoder->VideoThread, 100) == WAIT_OBJECT_0;
+			BOOL AudioDone = TRUE;
+			if (Encoder->AudioStreamIndex >= 0)
+			{
+				AudioDone = WaitForSingleObject(Encoder->AudioThread, 0) == WAIT_OBJECT_0;
+			}
+			if (VideoDone && AudioDone)
+			{
+				break;
+			}
+			DWORD Elapsed = GetTickCount() - WaitStart;
+			if (Elapsed >= ENCODER_STOP_WAIT_TIMEOUT_MS)
+			{
+				if (!atomic_exchange_explicit(&Encoder->DiscardQueued, 1, memory_order_acq_rel))
+				{
+					LOG_WARN("Encoder_Stop: encoder too congested to drain backlog, discarding queued samples...");
+				}
+			}
+			if (Elapsed - LastLog >= 5000)
+			{
+				uint32_t VQ = atomic_load(&Encoder->VideoQueue.Write) - atomic_load(&Encoder->VideoQueue.Read);
+				uint32_t AQ = (Encoder->AudioStreamIndex >= 0)
+					? atomic_load(&Encoder->AudioQueue.Write) - atomic_load(&Encoder->AudioQueue.Read) : 0;
+				LOG_INFO("Encoder_Stop: still waiting for writer threads (video=%lu audio=%lu queued)...",
+					(unsigned long)VQ, (unsigned long)AQ);
+				LastLog = Elapsed;
+			}
+		}
+	}
+	CloseHandle(Encoder->VideoThread);
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		CloseHandle(Encoder->AudioThread);
+	}
+
+	// everything queued has been written, finalize the file (may take a while if encoder was congested)
+	LOG_INFO("Encoder_Stop: calling IMFSinkWriter_Finalize (this may take a while if encoder is congested)...");
+	HRESULT hr = IMFSinkWriter_Finalize(Encoder->Writer);
+	if (FAILED(hr))
+	{
+		LOG_ERROR("IMFSinkWriter_Finalize failed: 0x%08lX", (unsigned long)hr);
+	}
+	else
+	{
+		LOG_INFO("IMFSinkWriter_Finalize completed successfully");
+	}
+
+	// tracked sample callbacks fire asynchronously on MF workqueue threads and reference
+	// this Encoder struct, wait for all buffers to come back before releasing them so
+	// a late callback cannot race cleanup (or a subsequent recording session)
+	uint64_t VideoFullMask = (1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1;
+	if (!Encoder__WaitForCallbacks(&Encoder->VideoSampleAvailable, VideoFullMask, 5000))
+	{
+		LOG_WARN("Encoder_Stop: video sample callbacks still pending after timeout, releasing anyway (mask: 0x%016llX)",
+			atomic_load(&Encoder->VideoSampleAvailable));
+	}
+	if (Encoder->AudioStreamIndex >= 0)
+	{
+		uint64_t AudioFullMask = (1ULL << ENCODER_AUDIO_BUFFER_COUNT) - 1;
+		if (!Encoder__WaitForCallbacks(&Encoder->AudioSampleAvailable, AudioFullMask, 5000))
+		{
+			LOG_WARN("Encoder_Stop: audio sample callbacks still pending after timeout, releasing anyway (mask: 0x%016llX)",
+				atomic_load(&Encoder->AudioSampleAvailable));
+		}
+	}
+
+	if (Encoder->AudioStreamIndex >= 0)
+	{
 		IMFTransform_Release(Encoder->Resampler);
 	}
 
-	IMFSinkWriter_Finalize(Encoder->Writer);
 	IMFSinkWriter_Release(Encoder->Writer);
 
 	if (Encoder->AudioStreamIndex >= 0)
@@ -783,9 +1277,8 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 	uint64_t Available = atomic_load(&Encoder->VideoSampleAvailable);
 	if (Available == 0)
 	{
-		// dropped frame
-		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
-		HR(IMFSinkWriter_SendStreamTick(Encoder->Writer, Encoder->VideoStreamIndex, Timestamp));
+		// dropped frame - no SendStreamTick here, Encoder_Update handles
+		// periodic discontinuity ticks through the writer thread queue
 		Encoder->VideoDiscontinuity = TRUE;
 		return FALSE;
 	}
@@ -852,15 +1345,22 @@ BOOL Encoder_NewFrame(Encoder* Encoder, ID3D11Texture2D* Texture, RECT Rect, UIN
 		IMFSample_DeleteItem(Sample, &MFSampleExtension_Discontinuity);
 	}
 
+	// if video writer thread queue is full, drop this frame instead of piling up
+	if (Encoder__QueueFull(&Encoder->VideoQueue))
+	{
+		atomic_fetch_or(&Encoder->VideoSampleAvailable, 1ULL << Index);
+		Encoder->VideoDiscontinuity = TRUE;
+		return FALSE;
+	}
+
 	IMFTrackedSample* Tracked;
 	HR(IMFSample_QueryInterface(Sample, &IID_IMFTrackedSample, (LPVOID*)&Tracked));
 	IMFTrackedSample_SetAllocator(Tracked, &Encoder->VideoSampleCallback, NULL);
 	IMFTrackedSample_Release(Tracked);
 
-	// submit to encoder which will happen in background
-	HR(IMFSinkWriter_WriteSample(Encoder->Writer, Encoder->VideoStreamIndex, Sample));
-
-	IMFSample_Release(Sample);
+	// submit to video writer thread which calls WriteSample in background (may block there without freezing us)
+	// writer thread releases our Sample reference after WriteSample
+	Encoder__Enqueue(&Encoder->VideoQueue, Sample, NULL, Encoder->VideoStreamIndex, 0);
 
 	return TRUE;
 }
@@ -953,6 +1453,13 @@ static IMFMediaBufferVtbl EncoderAudioBufferVtbl =
 
 void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UINT64 Time, UINT64 TimePeriod)
 {
+	static uint32_t LogCount;
+	LogCount++;
+	if (LogCount <= 5 || (LogCount % 100) == 0)
+	{
+		LOG_INFO("Encoder_NewSamples: frame_count=%lu time=%llu (call #%u)", (unsigned long)FrameCount, Time, LogCount);
+	}
+
 	EncoderAudioBuffer Input =
 	{
 		.Buffer.lpVtbl = &EncoderAudioBufferVtbl,
@@ -968,23 +1475,70 @@ void Encoder_NewSamples(Encoder* Encoder, LPCVOID Samples, DWORD FrameCount, UIN
 	HR(IMFSample_SetSampleDuration(AudioSample, MFllMulDiv(FrameCount, MF_UNITS_PER_SECOND, Encoder->AudioSampleRate, 0)));
 	HR(IMFSample_SetSampleTime(AudioSample, MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0)));
 
-	HR(IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0));
-	Encoder__OutputAudioSamples(Encoder);
+	// drain pending resampler output first, without blocking on encoder thread congestion
+	Encoder__OutputAudioSamples(Encoder, FALSE);
+
+	HRESULT hr = IMFTransform_ProcessInput(Encoder->Resampler, 0, AudioSample, 0);
+	if (hr == MF_E_NOTACCEPTING)
+	{
+		// resampler is full because encoder thread is congested, drop this audio chunk
+		// instead of blocking the caller, capture ringbuffer keeps getting drained
+		static uint32_t DropLogCount;
+		if (++DropLogCount <= 3 || (DropLogCount % 100) == 0)
+		{
+			LOG_WARN("Encoder_NewSamples: resampler not accepting input (encoder congested), dropping audio chunk (total %u)", DropLogCount);
+		}
+	}
+	else if (SUCCEEDED(hr))
+	{
+		Encoder__OutputAudioSamples(Encoder, FALSE);
+	}
+	else
+	{
+		LOG_ERROR("Encoder_NewSamples: IMFTransform_ProcessInput failed: 0x%08lX", (unsigned long)hr);
+	}
 
 	HR(IMFSample_RemoveAllBuffers(AudioSample));
 	Assert(Input.References == 0);
 }
 
-void Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod)
+// Returns TRUE if encoder is healthy, FALSE if video encoder is stalled (informational only)
+BOOL Encoder_Update(Encoder* Encoder, UINT64 Time, UINT64 TimePeriod)
 {
 	// if there was no frame during last second, add discontinuity
+	// tick goes through video writer thread queue, so it cannot block the caller
 	if ((int64_t)(Time - Encoder->VideoLastTime) >= (int64_t)TimePeriod)
 	{
 		Encoder->VideoLastTime = Time;
-		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
-		HR(IMFSinkWriter_SendStreamTick(Encoder->Writer, Encoder->VideoStreamIndex, Timestamp));
 		Encoder->VideoDiscontinuity = TRUE;
+
+		LONGLONG Timestamp = MFllMulDiv(Time - Encoder->StartTime, MF_UNITS_PER_SECOND, TimePeriod, 0);
+		Encoder__TryEnqueue(&Encoder->VideoQueue, NULL, NULL, Encoder->VideoStreamIndex, Timestamp);
 	}
+
+	// video stall detection: log when encoder is stalled (congestion guard in
+	// Encoder_NewFrame handles the actual frame dropping to avoid blocking)
+	if (Encoder->StartTime != 0 && Encoder->VideoStallTimeout != 0)
+	{
+		uint64_t LastReturn = atomic_load(&Encoder->VideoLastReturnTime);
+		if (LastReturn != 0 && (Time - LastReturn) > Encoder->VideoStallTimeout)
+		{
+			uint64_t Available = atomic_load(&Encoder->VideoSampleAvailable);
+			if (Available != ((1ULL << ENCODER_VIDEO_BUFFER_COUNT) - 1))
+			{
+				static uint64_t LastStallLog;
+				if (Time - LastStallLog > 10 * TimePeriod)
+				{
+					LOG_WARN("Encoder_Update: video encoder stalled for %llu seconds, dropping frames until recovery. Available mask: 0x%016llX",
+						(Time - LastReturn) / TimePeriod, Available);
+					LastStallLog = Time;
+				}
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
 }
 
 void Encoder_GetStats(Encoder* Encoder, DWORD* Bitrate, DWORD* LengthMsec, UINT64* FileSize)

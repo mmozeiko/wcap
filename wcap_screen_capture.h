@@ -205,6 +205,7 @@ static HRESULT STDMETHODCALLTYPE ScreenCapture__FrameInvoke(__FITypedEventHandle
 
 		if (!ContinueCapture)
 		{
+			LOG_INFO("ScreenCapture__FrameInvoke: callback requested stop");
 			ScreenCapture_Stop(Capture);
 		}
 	}
@@ -240,6 +241,7 @@ static ULONG STDMETHODCALLTYPE ScreenCapture__CloseRelease(__FITypedEventHandler
 
 static HRESULT STDMETHODCALLTYPE ScreenCapture__CloseInvoke(__FITypedEventHandler_2_Windows__CGraphics__CCapture__CGraphicsCaptureItem_IInspectable* This, __x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem* Sender, IInspectable* Args)
 {
+	LOG_WARN("ScreenCapture__CloseInvoke: capture item closed by system");
 	ScreenCapture* Capture = CONTAINING_RECORD(This, ScreenCapture, OnCloseHandler);
 	Capture->OnFrame(Capture, NULL);
 	return S_OK;
@@ -430,6 +432,8 @@ void ScreenCapture_Release(ScreenCapture* Capture)
 
 bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device, HWND Window, bool OnlyClientArea, bool DisableRoundedCorners)
 {
+	LOG_INFO("ScreenCapture_CreateForWindow: hwnd=%p only_client=%d disable_rounded=%d", (void*)Window, OnlyClientArea, DisableRoundedCorners);
+
 	IDXGIDevice* DxgiDevice;
 	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
 	HR(CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (IInspectable**)&Capture->Device));
@@ -440,6 +444,7 @@ bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device,
 	{
 		__x_ABI_CWindows_CGraphics_CSizeInt32 Size;
 		HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_get_Size(Item, &Size));
+		LOG_INFO("ScreenCapture_CreateForWindow: item size=%dx%d", Size.Width, Size.Height);
 
 		__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool* FramePool;
 		if (ScreenCapture__CreateFramePool(Capture, Size, &FramePool))
@@ -469,7 +474,12 @@ bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device,
 
 			return true;
 		}
+		LOG_ERROR("ScreenCapture_CreateForWindow: CreateFramePool failed");
 		__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureItem_Release(Item);
+	}
+	else
+	{
+		LOG_ERROR("ScreenCapture_CreateForWindow: CreateForWindow interop failed");
 	}
 
 	__x_ABI_CWindows_CGraphics_CDirectX_CDirect3D11_CIDirect3DDevice_Release(Capture->Device);
@@ -478,6 +488,8 @@ bool ScreenCapture_CreateForWindow(ScreenCapture* Capture, ID3D11Device* Device,
 
 bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device, HMONITOR Monitor, const RECT* Rect)
 {
+	LOG_INFO("ScreenCapture_CreateForMonitor: hmonitor=%p", (void*)Monitor);
+
 	IDXGIDevice* DxgiDevice;
 	HR(ID3D11Device_QueryInterface(Device, &IID_IDXGIDevice, (LPVOID*)&DxgiDevice));
 	HR(CreateDirect3D11DeviceFromDXGIDevice(DxgiDevice, (IInspectable**)&Capture->Device));
@@ -510,6 +522,8 @@ bool ScreenCapture_CreateForMonitor(ScreenCapture* Capture, ID3D11Device* Device
 
 void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool WithRecordingBorder, bool IncludeSecondaryWindows)
 {
+	LOG_INFO("ScreenCapture_Start: cursor=%d border=%d secondary=%d", WithMouseCursor, WithRecordingBorder, IncludeSecondaryWindows);
+
 	__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession* Session;
 	HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_CreateCaptureSession(Capture->FramePool, Capture->Item, &Session));
 
@@ -552,10 +566,13 @@ void ScreenCapture_Start(ScreenCapture* Capture, bool WithMouseCursor, bool With
 
 	HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_StartCapture(Session));
 	Capture->Session = Session;
+	LOG_INFO("ScreenCapture_Start: capture session started");
 }
 
 void ScreenCapture_Stop(ScreenCapture* Capture)
 {
+	LOG_INFO("ScreenCapture_Stop: beginning cleanup");
+
 	__x_ABI_CWindows_CFoundation_CIClosable* Closable;
 
 	if (Capture->OnFrameToken.value)
@@ -572,6 +589,7 @@ void ScreenCapture_Stop(ScreenCapture* Capture)
 
 	if (Capture->Session)
 	{
+		LOG_INFO("ScreenCapture_Stop: closing session...");
 		HR(__x_ABI_CWindows_CGraphics_CCapture_CIGraphicsCaptureSession_QueryInterface(Capture->Session, &IID_IClosable, (void**)&Closable));
 		HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
 		__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
@@ -582,6 +600,7 @@ void ScreenCapture_Stop(ScreenCapture* Capture)
 
 	if (Capture->Item)
 	{
+		LOG_INFO("ScreenCapture_Stop: closing frame pool and item...");
 		HR(__x_ABI_CWindows_CGraphics_CCapture_CIDirect3D11CaptureFramePool_QueryInterface(Capture->FramePool, &IID_IClosable, (void**)&Closable));
 		HR(__x_ABI_CWindows_CFoundation_CIClosable_Close(Closable));
 		__x_ABI_CWindows_CFoundation_CIClosable_Release(Closable);
@@ -600,6 +619,8 @@ void ScreenCapture_Stop(ScreenCapture* Capture)
 	{
 		DwmSetWindowAttribute(Capture->Window, DWMWA_WINDOW_CORNER_PREFERENCE, &Capture->WindowCornerPreference, sizeof(Capture->WindowCornerPreference));
 	}
+
+	LOG_INFO("ScreenCapture_Stop: cleanup complete");
 }
 
 bool ScreenCapture_GetFrame(ScreenCapture* Capture, ScreenCaptureFrame* Frame)
