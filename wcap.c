@@ -1107,7 +1107,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	}
 	else if (Message == WM_WCAP_ALREADY_RUNNING)
 	{
-		ShowNotification(L"wcap is already running!", NULL, NIIF_INFO);
+		WCHAR MonitorKey[64], WindowKey[64], RegionKey[64];
+		Config__FormatKey(gConfig.ShortcutMonitor, MonitorKey);
+		Config__FormatKey(gConfig.ShortcutWindow, WindowKey);
+		Config__FormatKey(gConfig.ShortcutRegion, RegionKey);
+
+		WCHAR Text[256];
+		StrFormat(Text, L"Monitor: %ls\nWindow: %ls\nRegion: %ls", MonitorKey, WindowKey, RegionKey);
+		ShowNotification(Text, L"wcap is already running!", NIIF_INFO);
 		return 0;
 	}
 	else if (Message == WM_TASKBARCREATED)
