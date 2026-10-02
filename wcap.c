@@ -392,7 +392,7 @@ static ID3D11Device* CreateDevice(void)
 	D3D_DRIVER_TYPE Driver = Adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
 	if (FAILED(D3D11CreateDevice(Adapter, Driver, NULL, flags, (D3D_FEATURE_LEVEL[]) { D3D_FEATURE_LEVEL_11_0 }, 1, D3D11_SDK_VERSION, &Device, NULL, NULL)))
 	{
-		ShowNotification(L"Cannot to create D3D11 device!", L"Error", NIIF_ERROR);
+		ShowNotification(L"Cannot create D3D11 device!", L"Error", NIIF_ERROR);
 		Device = NULL;
 	}
 	if (Adapter)
